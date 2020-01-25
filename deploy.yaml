@@ -24,7 +24,7 @@ spec:
     spec:
       serviceAccountName: klum
       containers:
-      - image: ibuildthecloud/klum:dev
+      - image: ibuildthecloud/klum:v0.0.1
         name: klum
 
 ---
