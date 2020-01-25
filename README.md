@@ -13,7 +13,7 @@ configured this should work on any Kubernetes cluster.
 ## Installation
 
 ```sh
-kubectl apply -f https://raw.githubusercontent.com/ibuilthecloud/klum/master/deploy.yaml
+kubectl apply -f https://raw.githubusercontent.com/ibuildthecloud/klum/v0.0.1/deploy.yaml
 ```
 
 ## Usage
