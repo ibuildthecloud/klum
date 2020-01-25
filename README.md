@@ -29,7 +29,8 @@ metadata:
 
 ### Download Kubeconfig
 ```shell script
-kubectl get kubeconfig darren -o json | jq .spec > ~/.kube/config
+kubectl get kubeconfig darren -o json | jq .spec > kubeconfig
+kubectl --kubeconfig=kubeconfig get all
 ```
 The name of the kubeconfig resource will be the same as the user name
 
@@ -55,6 +56,10 @@ spec:
     # or assign a role specific to that namespace
     role: something-custom
 ```
+
+If you don't assign a role a default role will be assigned to the user which is
+configured on the controller.  The default value is cluster-admin, so change
+that if you want a more secure setup.
 
 ### Disable user
 ```yaml
