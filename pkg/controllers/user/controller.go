@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+
 	klum "github.com/ibuildthecloud/klum/pkg/apis/klum.cattle.io/v1alpha1"
 	"github.com/ibuildthecloud/klum/pkg/generated/controllers/klum.cattle.io/v1alpha1"
 	v1controller "github.com/rancher/wrangler-api/pkg/generated/controllers/core/v1"
@@ -34,6 +35,7 @@ func Register(ctx context.Context,
 	apply apply.Apply,
 	serviceAccount v1controller.ServiceAccountController,
 	crb rbaccontroller.ClusterRoleBindingController,
+	rb rbaccontroller.RoleBindingController,
 	secrets v1controller.SecretController,
 	kconfig v1alpha1.KubeconfigController,
 	user v1alpha1.UserController) {
@@ -47,7 +49,7 @@ func Register(ctx context.Context,
 	v1alpha1.RegisterUserGeneratingHandler(ctx,
 		user,
 		apply.WithCacheTypes(serviceAccount,
-			crb),
+			crb, rb),
 		"",
 		"klum-user",
 		h.OnUserChange,
@@ -136,37 +138,48 @@ func (h *handler) getRoles(user *klum.User) []runtime.Object {
 			continue
 		}
 
-		rb := &rbacv1.RoleBinding{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      name(user.Name, role.Namespace, role.ClusterRole, role.Role),
-				Namespace: role.Namespace,
-			},
-			Subjects: subjects,
-		}
-
 		if role.Role != "" {
-			rb.RoleRef = rbacv1.RoleRef{
-				APIGroup: "rbac.authorization.k8s.io",
-				Kind:     "Role",
-				Name:     role.Role,
+			rb := &rbacv1.RoleBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      name(user.Name, role.Namespace, "", role.Role),
+					Namespace: role.Namespace,
+				},
+				Subjects: subjects,
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: "rbac.authorization.k8s.io",
+					Kind:     "Role",
+					Name:     role.Role,
+				},
 			}
-		} else {
-			rb.RoleRef = rbacv1.RoleRef{
-				APIGroup: "rbac.authorization.k8s.io",
-				Kind:     "ClusterRole",
-				Name:     role.ClusterRole,
-			}
+			objs = append(objs, rb)
 		}
 
-		objs = append(objs, rb)
+		if role.ClusterRole != "" {
+			rb := &rbacv1.RoleBinding{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      name(user.Name, role.Namespace, role.ClusterRole, ""),
+					Namespace: role.Namespace,
+				},
+				Subjects: subjects,
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: "rbac.authorization.k8s.io",
+					Kind:     "ClusterRole",
+					Name:     role.ClusterRole,
+				},
+			}
+			objs = append(objs, rb)
+		}
 	}
 
 	return objs
 }
 
 func name(user, namespace, clusterRole, role string) string {
-	// this is so we don't get conflics
+	// this is so we don't get conflicts
 	suffix := md5.Sum([]byte(fmt.Sprintf("%s/%s/%s/%s", user, namespace, clusterRole, role)))
+	if role == "" {
+		role = clusterRole
+	}
 	return name2.SafeConcatName("klum", user, role, hex.EncodeToString(suffix[:])[:8])
 }
 

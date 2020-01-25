@@ -2,6 +2,7 @@ package crd
 
 import (
 	"context"
+
 	"github.com/ibuildthecloud/klum/pkg/apis/klum.cattle.io/v1alpha1"
 	"github.com/rancher/norman/v2/pkg/openapi"
 	"github.com/rancher/wrangler/pkg/crd"

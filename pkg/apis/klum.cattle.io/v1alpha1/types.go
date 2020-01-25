@@ -17,14 +17,14 @@ var (
 type User struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
-	Spec              UserSpec `json:"spec,omitempty"`
-	Status              UserStatus `json:"status,omitempty"`
+	Spec              UserSpec   `json:"spec,omitempty"`
+	Status            UserStatus `json:"status,omitempty"`
 }
 
 type UserSpec struct {
-	Enabled *bool `json:"enabled,omitempty"`
-	ClusterRoles []string `json:"clusterRoles,omitempty"`
-	Roles []NamespaceRole `json:"roles,omitempty"`
+	Enabled      *bool           `json:"enabled,omitempty"`
+	ClusterRoles []string        `json:"clusterRoles,omitempty"`
+	Roles        []NamespaceRole `json:"roles,omitempty"`
 }
 
 type UserStatus struct {
@@ -32,9 +32,9 @@ type UserStatus struct {
 }
 
 type NamespaceRole struct {
-	Namespace string `json:"namespace,omitempty"`
-	ClusterRole string  `json:"clusterRole,omitempty"`
-	Role string  `json:"role,omitempty"`
+	Namespace   string `json:"namespace,omitempty"`
+	ClusterRole string `json:"clusterRole,omitempty"`
+	Role        string `json:"role,omitempty"`
 }
 
 // +genclient

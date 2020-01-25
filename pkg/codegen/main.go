@@ -1,10 +1,11 @@
 package main
 
 import (
-	"github.com/ibuildthecloud/klum/pkg/apis/klum.cattle.io/v1alpha1"
-	"github.com/rancher/wrangler/pkg/controller-gen"
-	"github.com/rancher/wrangler/pkg/controller-gen/args"
 	"os"
+
+	"github.com/ibuildthecloud/klum/pkg/apis/klum.cattle.io/v1alpha1"
+	controllergen "github.com/rancher/wrangler/pkg/controller-gen"
+	"github.com/rancher/wrangler/pkg/controller-gen/args"
 )
 
 func main() {

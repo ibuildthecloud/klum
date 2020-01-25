@@ -27,18 +27,18 @@ metadata:
   name: darren
 ```
 
-## Download Kubeconfig
+### Download Kubeconfig
 ```shell script
 kubectl get kubeconfig darren -o json | jq .spec > ~/.kube/config
 ```
 The name of the kubeconfig resource will be the same as the user name
 
-## Delete User
+### Delete User
 ```shell script
 kubectl delete user darren
 ```
 
-## Assign Roles
+### Assign Roles
 ```yaml
 kind: User
 apiVersion: klum.cattle.io/v1alpha1
@@ -55,6 +55,18 @@ spec:
     # or assign a role specific to that namespace
     role: something-custom
 ```
+
+### Disable user
+```yaml
+kind: User
+apiVersion: klum.cattle.io/v1alpha1
+metadata:
+  name: darren
+spec:
+  enabled: false
+```
+
+When the user is reenabled a new kubeconfig with new token will be created.
 
 ## Configuration
 The controller can be configured as follows.  You will need to edit the deployment and change
@@ -73,6 +85,7 @@ GLOBAL OPTIONS:
 
 `make` or just `go build`
 
+![](https://media.giphy.com/media/3o7TKGMZHi73yzCumQ/giphy.gif)
 
 ## Running
 

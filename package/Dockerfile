@@ -1,3 +1,3 @@
-FROM alpine
-COPY bin/klum /usr/bin/
-CMD ["klum"]
+FROM scratch
+COPY bin/klum /klum
+CMD ["/klum"]

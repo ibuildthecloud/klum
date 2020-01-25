@@ -1,5 +1,4 @@
 //go:generate go run pkg/codegen/cleanup/main.go
-//go:generate /bin/rm -rf pkg/generated
 //go:generate go run pkg/codegen/main.go
 
 package main
@@ -7,6 +6,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+
 	"github.com/ibuildthecloud/klum/pkg/controllers/user"
 	"github.com/ibuildthecloud/klum/pkg/crd"
 	"github.com/ibuildthecloud/klum/pkg/generated/controllers/klum.cattle.io"
@@ -18,7 +19,6 @@ import (
 	"github.com/rancher/wrangler/pkg/start"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
-	"os"
 )
 
 var (
@@ -64,7 +64,7 @@ func main() {
 			Name:        "ca",
 			Usage:       "The value of the CA data to put in the Kubeconfig",
 			EnvVar:      "CA",
-			Destination: &cfg.Server,
+			Destination: &cfg.CA,
 		},
 		cli.StringFlag{
 			Name:        "default-cluster-role",
@@ -94,7 +94,7 @@ func run(c *cli.Context) error {
 		return err
 	}
 
-	core, err := core.NewFactoryFromConfigWithNamespace(restConfig, cfg.Namespace)
+	core, err := core.NewFactoryFromConfig(restConfig)
 	if err != nil {
 		return err
 	}
@@ -104,7 +104,7 @@ func run(c *cli.Context) error {
 		return err
 	}
 
-	rbac, err := rbac.NewFactoryFromConfigWithNamespace(restConfig, cfg.Namespace)
+	rbac, err := rbac.NewFactoryFromConfig(restConfig)
 	if err != nil {
 		return err
 	}
@@ -119,6 +119,7 @@ func run(c *cli.Context) error {
 		apply,
 		core.Core().V1().ServiceAccount(),
 		rbac.Rbac().V1().ClusterRoleBinding(),
+		rbac.Rbac().V1().RoleBinding(),
 		core.Core().V1().Secret(),
 		klum.Klum().V1alpha1().Kubeconfig(),
 		klum.Klum().V1alpha1().User())
