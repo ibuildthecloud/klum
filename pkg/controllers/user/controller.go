@@ -134,40 +134,44 @@ func (h *handler) getRoles(user *klum.User) []runtime.Object {
 
 	for _, role := range user.Spec.Roles {
 		if role.Namespace == "" ||
-			role.Role == "" && role.ClusterRole == "" {
+			len(role.Roles) == 0 && len(role.ClusterRoles) == 0 {
 			continue
 		}
 
-		if role.Role != "" {
-			rb := &rbacv1.RoleBinding{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      name(user.Name, role.Namespace, "", role.Role),
-					Namespace: role.Namespace,
-				},
-				Subjects: subjects,
-				RoleRef: rbacv1.RoleRef{
-					APIGroup: "rbac.authorization.k8s.io",
-					Kind:     "Role",
-					Name:     role.Role,
-				},
+		if len(role.Roles) != 0 {
+			for _, roleItem := range role.Roles {
+				rb := &rbacv1.RoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      name(user.Name, role.Namespace, "", roleItem),
+						Namespace: role.Namespace,
+					},
+					Subjects: subjects,
+					RoleRef: rbacv1.RoleRef{
+						APIGroup: "rbac.authorization.k8s.io",
+						Kind:     "Role",
+						Name:     roleItem,
+					},
+				}
+				objs = append(objs, rb)
 			}
-			objs = append(objs, rb)
 		}
 
-		if role.ClusterRole != "" {
-			rb := &rbacv1.RoleBinding{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      name(user.Name, role.Namespace, role.ClusterRole, ""),
-					Namespace: role.Namespace,
-				},
-				Subjects: subjects,
-				RoleRef: rbacv1.RoleRef{
-					APIGroup: "rbac.authorization.k8s.io",
-					Kind:     "ClusterRole",
-					Name:     role.ClusterRole,
-				},
+		if len(role.ClusterRoles) != 0 {
+			for _, clusterRoleItem := range role.ClusterRoles {
+				rb := &rbacv1.RoleBinding{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      name(user.Name, role.Namespace, clusterRoleItem, ""),
+						Namespace: role.Namespace,
+					},
+					Subjects: subjects,
+					RoleRef: rbacv1.RoleRef{
+						APIGroup: "rbac.authorization.k8s.io",
+						Kind:     "ClusterRole",
+						Name:     clusterRoleItem,
+					},
+				}
+				objs = append(objs, rb)
 			}
-			objs = append(objs, rb)
 		}
 	}
 
