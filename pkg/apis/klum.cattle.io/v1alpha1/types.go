@@ -32,9 +32,9 @@ type UserStatus struct {
 }
 
 type NamespaceRole struct {
-	Namespace   string `json:"namespace,omitempty"`
-	ClusterRole string `json:"clusterRole,omitempty"`
-	Role        string `json:"role,omitempty"`
+	Namespace    string   `json:"namespace,omitempty"`
+	ClusterRoles []string `json:"clusterRoles,omitempty"`
+	Roles        []string `json:"roles,omitempty"`
 }
 
 // +genclient
