@@ -22,9 +22,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/rancher/lasso/pkg/client"
+	"github.com/rancher/lasso/pkg/controller"
 	"github.com/rancher/wrangler/pkg/apply"
 	"github.com/rancher/wrangler/pkg/condition"
 	"github.com/rancher/wrangler/pkg/generic"
+	"github.com/rancher/wrangler/pkg/kv"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -35,9 +38,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/watch"
-	informers "k8s.io/client-go/informers/core/v1"
-	clientset "k8s.io/client-go/kubernetes/typed/core/v1"
-	listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -77,18 +77,22 @@ type PodCache interface {
 type PodIndexer func(obj *v1.Pod) ([]string, error)
 
 type podController struct {
-	controllerManager *generic.ControllerManager
-	clientGetter      clientset.PodsGetter
-	informer          informers.PodInformer
-	gvk               schema.GroupVersionKind
+	controller    controller.SharedController
+	client        *client.Client
+	gvk           schema.GroupVersionKind
+	groupResource schema.GroupResource
 }
 
-func NewPodController(gvk schema.GroupVersionKind, controllerManager *generic.ControllerManager, clientGetter clientset.PodsGetter, informer informers.PodInformer) PodController {
+func NewPodController(gvk schema.GroupVersionKind, resource string, namespaced bool, controller controller.SharedControllerFactory) PodController {
+	c := controller.ForResourceKind(gvk.GroupVersion().WithResource(resource), gvk.Kind, namespaced)
 	return &podController{
-		controllerManager: controllerManager,
-		clientGetter:      clientGetter,
-		informer:          informer,
-		gvk:               gvk,
+		controller: c,
+		client:     c.Client(),
+		gvk:        gvk,
+		groupResource: schema.GroupResource{
+			Group:    gvk.Group,
+			Resource: resource,
+		},
 	}
 }
 
@@ -135,12 +139,11 @@ func UpdatePodDeepCopyOnChange(client PodClient, obj *v1.Pod, handler func(obj *
 }
 
 func (c *podController) AddGenericHandler(ctx context.Context, name string, handler generic.Handler) {
-	c.controllerManager.AddHandler(ctx, c.gvk, c.informer.Informer(), name, handler)
+	c.controller.RegisterHandler(ctx, name, controller.SharedControllerHandlerFunc(handler))
 }
 
 func (c *podController) AddGenericRemoveHandler(ctx context.Context, name string, handler generic.Handler) {
-	removeHandler := generic.NewRemoveHandler(name, c.Updater(), handler)
-	c.controllerManager.AddHandler(ctx, c.gvk, c.informer.Informer(), name, removeHandler)
+	c.AddGenericHandler(ctx, name, generic.NewRemoveHandler(name, c.Updater(), handler))
 }
 
 func (c *podController) OnChange(ctx context.Context, name string, sync PodHandler) {
@@ -148,20 +151,19 @@ func (c *podController) OnChange(ctx context.Context, name string, sync PodHandl
 }
 
 func (c *podController) OnRemove(ctx context.Context, name string, sync PodHandler) {
-	removeHandler := generic.NewRemoveHandler(name, c.Updater(), FromPodHandlerToHandler(sync))
-	c.AddGenericHandler(ctx, name, removeHandler)
+	c.AddGenericHandler(ctx, name, generic.NewRemoveHandler(name, c.Updater(), FromPodHandlerToHandler(sync)))
 }
 
 func (c *podController) Enqueue(namespace, name string) {
-	c.controllerManager.Enqueue(c.gvk, c.informer.Informer(), namespace, name)
+	c.controller.Enqueue(namespace, name)
 }
 
 func (c *podController) EnqueueAfter(namespace, name string, duration time.Duration) {
-	c.controllerManager.EnqueueAfter(c.gvk, c.informer.Informer(), namespace, name, duration)
+	c.controller.EnqueueAfter(namespace, name, duration)
 }
 
 func (c *podController) Informer() cache.SharedIndexInformer {
-	return c.informer.Informer()
+	return c.controller.Informer()
 }
 
 func (c *podController) GroupVersionKind() schema.GroupVersionKind {
@@ -170,54 +172,75 @@ func (c *podController) GroupVersionKind() schema.GroupVersionKind {
 
 func (c *podController) Cache() PodCache {
 	return &podCache{
-		lister:  c.informer.Lister(),
-		indexer: c.informer.Informer().GetIndexer(),
+		indexer:  c.Informer().GetIndexer(),
+		resource: c.groupResource,
 	}
 }
 
 func (c *podController) Create(obj *v1.Pod) (*v1.Pod, error) {
-	return c.clientGetter.Pods(obj.Namespace).Create(obj)
+	result := &v1.Pod{}
+	return result, c.client.Create(context.TODO(), obj.Namespace, obj, result, metav1.CreateOptions{})
 }
 
 func (c *podController) Update(obj *v1.Pod) (*v1.Pod, error) {
-	return c.clientGetter.Pods(obj.Namespace).Update(obj)
+	result := &v1.Pod{}
+	return result, c.client.Update(context.TODO(), obj.Namespace, obj, result, metav1.UpdateOptions{})
 }
 
 func (c *podController) UpdateStatus(obj *v1.Pod) (*v1.Pod, error) {
-	return c.clientGetter.Pods(obj.Namespace).UpdateStatus(obj)
+	result := &v1.Pod{}
+	return result, c.client.UpdateStatus(context.TODO(), obj.Namespace, obj, result, metav1.UpdateOptions{})
 }
 
 func (c *podController) Delete(namespace, name string, options *metav1.DeleteOptions) error {
-	return c.clientGetter.Pods(namespace).Delete(name, options)
+	if options == nil {
+		options = &metav1.DeleteOptions{}
+	}
+	return c.client.Delete(context.TODO(), namespace, name, *options)
 }
 
 func (c *podController) Get(namespace, name string, options metav1.GetOptions) (*v1.Pod, error) {
-	return c.clientGetter.Pods(namespace).Get(name, options)
+	result := &v1.Pod{}
+	return result, c.client.Get(context.TODO(), namespace, name, result, options)
 }
 
 func (c *podController) List(namespace string, opts metav1.ListOptions) (*v1.PodList, error) {
-	return c.clientGetter.Pods(namespace).List(opts)
+	result := &v1.PodList{}
+	return result, c.client.List(context.TODO(), namespace, result, opts)
 }
 
 func (c *podController) Watch(namespace string, opts metav1.ListOptions) (watch.Interface, error) {
-	return c.clientGetter.Pods(namespace).Watch(opts)
+	return c.client.Watch(context.TODO(), namespace, opts)
 }
 
-func (c *podController) Patch(namespace, name string, pt types.PatchType, data []byte, subresources ...string) (result *v1.Pod, err error) {
-	return c.clientGetter.Pods(namespace).Patch(name, pt, data, subresources...)
+func (c *podController) Patch(namespace, name string, pt types.PatchType, data []byte, subresources ...string) (*v1.Pod, error) {
+	result := &v1.Pod{}
+	return result, c.client.Patch(context.TODO(), namespace, name, pt, data, result, metav1.PatchOptions{}, subresources...)
 }
 
 type podCache struct {
-	lister  listers.PodLister
-	indexer cache.Indexer
+	indexer  cache.Indexer
+	resource schema.GroupResource
 }
 
 func (c *podCache) Get(namespace, name string) (*v1.Pod, error) {
-	return c.lister.Pods(namespace).Get(name)
+	obj, exists, err := c.indexer.GetByKey(namespace + "/" + name)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, errors.NewNotFound(c.resource, name)
+	}
+	return obj.(*v1.Pod), nil
 }
 
-func (c *podCache) List(namespace string, selector labels.Selector) ([]*v1.Pod, error) {
-	return c.lister.Pods(namespace).List(selector)
+func (c *podCache) List(namespace string, selector labels.Selector) (ret []*v1.Pod, err error) {
+
+	err = cache.ListAllByNamespace(c.indexer, namespace, selector, func(m interface{}) {
+		ret = append(ret, m.(*v1.Pod))
+	})
+
+	return ret, err
 }
 
 func (c *podCache) AddIndexer(indexName string, indexer PodIndexer) {
@@ -233,6 +256,7 @@ func (c *podCache) GetByIndex(indexName, key string) (result []*v1.Pod, err erro
 	if err != nil {
 		return nil, err
 	}
+	result = make([]*v1.Pod, 0, len(objs))
 	for _, obj := range objs {
 		result = append(result, obj.(*v1.Pod))
 	}
@@ -263,6 +287,7 @@ func RegisterPodGeneratingHandler(ctx context.Context, controller PodController,
 	if opts != nil {
 		statusHandler.opts = *opts
 	}
+	controller.OnChange(ctx, name, statusHandler.Remove)
 	RegisterPodStatusHandler(ctx, controller, condition, name, statusHandler.Handle)
 }
 
@@ -277,7 +302,7 @@ func (a *podStatusHandler) sync(key string, obj *v1.Pod) (*v1.Pod, error) {
 		return obj, nil
 	}
 
-	origStatus := obj.Status
+	origStatus := obj.Status.DeepCopy()
 	obj = obj.DeepCopy()
 	newStatus, err := a.handler(obj, obj.Status)
 	if err != nil {
@@ -285,19 +310,27 @@ func (a *podStatusHandler) sync(key string, obj *v1.Pod) (*v1.Pod, error) {
 		newStatus = *origStatus.DeepCopy()
 	}
 
-	obj.Status = newStatus
 	if a.condition != "" {
 		if errors.IsConflict(err) {
-			a.condition.SetError(obj, "", nil)
+			a.condition.SetError(&newStatus, "", nil)
 		} else {
-			a.condition.SetError(obj, "", err)
+			a.condition.SetError(&newStatus, "", err)
 		}
 	}
-	if !equality.Semantic.DeepEqual(origStatus, obj.Status) {
+	if !equality.Semantic.DeepEqual(origStatus, &newStatus) {
+		if a.condition != "" {
+			// Since status has changed, update the lastUpdatedTime
+			a.condition.LastUpdated(&newStatus, time.Now().UTC().Format(time.RFC3339))
+		}
+
 		var newErr error
-		obj, newErr = a.client.UpdateStatus(obj)
+		obj.Status = newStatus
+		newObj, newErr := a.client.UpdateStatus(obj)
 		if err == nil {
 			err = newErr
+		}
+		if newErr == nil {
+			obj = newObj
 		}
 	}
 	return obj, err
@@ -311,29 +344,32 @@ type podGeneratingHandler struct {
 	name  string
 }
 
+func (a *podGeneratingHandler) Remove(key string, obj *v1.Pod) (*v1.Pod, error) {
+	if obj != nil {
+		return obj, nil
+	}
+
+	obj = &v1.Pod{}
+	obj.Namespace, obj.Name = kv.RSplit(key, "/")
+	obj.SetGroupVersionKind(a.gvk)
+
+	return nil, generic.ConfigureApplyForObject(a.apply, obj, &a.opts).
+		WithOwner(obj).
+		WithSetID(a.name).
+		ApplyObjects()
+}
+
 func (a *podGeneratingHandler) Handle(obj *v1.Pod, status v1.PodStatus) (v1.PodStatus, error) {
+	if !obj.DeletionTimestamp.IsZero() {
+		return status, nil
+	}
+
 	objs, newStatus, err := a.PodGeneratingHandler(obj, status)
 	if err != nil {
 		return newStatus, err
 	}
 
-	apply := a.apply
-
-	if !a.opts.DynamicLookup {
-		apply = apply.WithStrictCaching()
-	}
-
-	if !a.opts.AllowCrossNamespace && !a.opts.AllowClusterScoped {
-		apply = apply.WithSetOwnerReference(true, false).
-			WithDefaultNamespace(obj.GetNamespace()).
-			WithListerNamespace(obj.GetNamespace())
-	}
-
-	if !a.opts.AllowClusterScoped {
-		apply = apply.WithRestrictClusterScoped()
-	}
-
-	return newStatus, apply.
+	return newStatus, generic.ConfigureApplyForObject(a.apply, obj, &a.opts).
 		WithOwner(obj).
 		WithSetID(a.name).
 		ApplyObjects(objs...)

@@ -4,9 +4,10 @@ import (
 	"context"
 
 	"github.com/ibuildthecloud/klum/pkg/apis/klum.cattle.io/v1alpha1"
-	"github.com/rancher/norman/v2/pkg/openapi"
+	"github.com/rancher/wrangler/pkg/schemas/openapi"
+
 	"github.com/rancher/wrangler/pkg/crd"
-	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/client-go/rest"
 )
 
@@ -27,7 +28,7 @@ func newCRD(name string, obj interface{}) crd.CRD {
 		WithSchema(mustSchema(obj))
 }
 
-func mustSchema(obj interface{}) *v1beta1.JSONSchemaProps {
+func mustSchema(obj interface{}) *v1.JSONSchemaProps {
 	result, err := openapi.ToOpenAPIFromStruct(obj)
 	if err != nil {
 		panic(err)

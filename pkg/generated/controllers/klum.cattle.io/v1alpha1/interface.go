@@ -1,5 +1,5 @@
 /*
-Copyright 2020 Rancher Labs, Inc.
+Copyright 2022 Rancher Labs, Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,34 +20,33 @@ package v1alpha1
 
 import (
 	v1alpha1 "github.com/ibuildthecloud/klum/pkg/apis/klum.cattle.io/v1alpha1"
-	clientset "github.com/ibuildthecloud/klum/pkg/generated/clientset/versioned/typed/klum.cattle.io/v1alpha1"
-	informers "github.com/ibuildthecloud/klum/pkg/generated/informers/externalversions/klum.cattle.io/v1alpha1"
-	"github.com/rancher/wrangler/pkg/generic"
+	"github.com/rancher/lasso/pkg/controller"
+	"github.com/rancher/wrangler/pkg/schemes"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
+
+func init() {
+	schemes.Register(v1alpha1.AddToScheme)
+}
 
 type Interface interface {
 	Kubeconfig() KubeconfigController
 	User() UserController
 }
 
-func New(controllerManager *generic.ControllerManager, client clientset.KlumV1alpha1Interface,
-	informers informers.Interface) Interface {
+func New(controllerFactory controller.SharedControllerFactory) Interface {
 	return &version{
-		controllerManager: controllerManager,
-		client:            client,
-		informers:         informers,
+		controllerFactory: controllerFactory,
 	}
 }
 
 type version struct {
-	controllerManager *generic.ControllerManager
-	informers         informers.Interface
-	client            clientset.KlumV1alpha1Interface
+	controllerFactory controller.SharedControllerFactory
 }
 
 func (c *version) Kubeconfig() KubeconfigController {
-	return NewKubeconfigController(v1alpha1.SchemeGroupVersion.WithKind("Kubeconfig"), c.controllerManager, c.client, c.informers.Kubeconfigs())
+	return NewKubeconfigController(schema.GroupVersionKind{Group: "klum.cattle.io", Version: "v1alpha1", Kind: "Kubeconfig"}, "kubeconfigs", false, c.controllerFactory)
 }
 func (c *version) User() UserController {
-	return NewUserController(v1alpha1.SchemeGroupVersion.WithKind("User"), c.controllerManager, c.client, c.informers.Users())
+	return NewUserController(schema.GroupVersionKind{Group: "klum.cattle.io", Version: "v1alpha1", Kind: "User"}, "users", false, c.controllerFactory)
 }

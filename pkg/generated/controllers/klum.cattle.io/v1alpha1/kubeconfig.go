@@ -1,5 +1,5 @@
 /*
-Copyright 2020 Rancher Labs, Inc.
+Copyright 2022 Rancher Labs, Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,11 +23,11 @@ import (
 	"time"
 
 	v1alpha1 "github.com/ibuildthecloud/klum/pkg/apis/klum.cattle.io/v1alpha1"
-	clientset "github.com/ibuildthecloud/klum/pkg/generated/clientset/versioned/typed/klum.cattle.io/v1alpha1"
-	informers "github.com/ibuildthecloud/klum/pkg/generated/informers/externalversions/klum.cattle.io/v1alpha1"
-	listers "github.com/ibuildthecloud/klum/pkg/generated/listers/klum.cattle.io/v1alpha1"
+	"github.com/rancher/lasso/pkg/client"
+	"github.com/rancher/lasso/pkg/controller"
 	"github.com/rancher/wrangler/pkg/generic"
 	"k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -74,18 +74,22 @@ type KubeconfigCache interface {
 type KubeconfigIndexer func(obj *v1alpha1.Kubeconfig) ([]string, error)
 
 type kubeconfigController struct {
-	controllerManager *generic.ControllerManager
-	clientGetter      clientset.KubeconfigsGetter
-	informer          informers.KubeconfigInformer
-	gvk               schema.GroupVersionKind
+	controller    controller.SharedController
+	client        *client.Client
+	gvk           schema.GroupVersionKind
+	groupResource schema.GroupResource
 }
 
-func NewKubeconfigController(gvk schema.GroupVersionKind, controllerManager *generic.ControllerManager, clientGetter clientset.KubeconfigsGetter, informer informers.KubeconfigInformer) KubeconfigController {
+func NewKubeconfigController(gvk schema.GroupVersionKind, resource string, namespaced bool, controller controller.SharedControllerFactory) KubeconfigController {
+	c := controller.ForResourceKind(gvk.GroupVersion().WithResource(resource), gvk.Kind, namespaced)
 	return &kubeconfigController{
-		controllerManager: controllerManager,
-		clientGetter:      clientGetter,
-		informer:          informer,
-		gvk:               gvk,
+		controller: c,
+		client:     c.Client(),
+		gvk:        gvk,
+		groupResource: schema.GroupResource{
+			Group:    gvk.Group,
+			Resource: resource,
+		},
 	}
 }
 
@@ -132,12 +136,11 @@ func UpdateKubeconfigDeepCopyOnChange(client KubeconfigClient, obj *v1alpha1.Kub
 }
 
 func (c *kubeconfigController) AddGenericHandler(ctx context.Context, name string, handler generic.Handler) {
-	c.controllerManager.AddHandler(ctx, c.gvk, c.informer.Informer(), name, handler)
+	c.controller.RegisterHandler(ctx, name, controller.SharedControllerHandlerFunc(handler))
 }
 
 func (c *kubeconfigController) AddGenericRemoveHandler(ctx context.Context, name string, handler generic.Handler) {
-	removeHandler := generic.NewRemoveHandler(name, c.Updater(), handler)
-	c.controllerManager.AddHandler(ctx, c.gvk, c.informer.Informer(), name, removeHandler)
+	c.AddGenericHandler(ctx, name, generic.NewRemoveHandler(name, c.Updater(), handler))
 }
 
 func (c *kubeconfigController) OnChange(ctx context.Context, name string, sync KubeconfigHandler) {
@@ -145,20 +148,19 @@ func (c *kubeconfigController) OnChange(ctx context.Context, name string, sync K
 }
 
 func (c *kubeconfigController) OnRemove(ctx context.Context, name string, sync KubeconfigHandler) {
-	removeHandler := generic.NewRemoveHandler(name, c.Updater(), FromKubeconfigHandlerToHandler(sync))
-	c.AddGenericHandler(ctx, name, removeHandler)
+	c.AddGenericHandler(ctx, name, generic.NewRemoveHandler(name, c.Updater(), FromKubeconfigHandlerToHandler(sync)))
 }
 
 func (c *kubeconfigController) Enqueue(name string) {
-	c.controllerManager.Enqueue(c.gvk, c.informer.Informer(), "", name)
+	c.controller.Enqueue("", name)
 }
 
 func (c *kubeconfigController) EnqueueAfter(name string, duration time.Duration) {
-	c.controllerManager.EnqueueAfter(c.gvk, c.informer.Informer(), "", name, duration)
+	c.controller.EnqueueAfter("", name, duration)
 }
 
 func (c *kubeconfigController) Informer() cache.SharedIndexInformer {
-	return c.informer.Informer()
+	return c.controller.Informer()
 }
 
 func (c *kubeconfigController) GroupVersionKind() schema.GroupVersionKind {
@@ -167,50 +169,70 @@ func (c *kubeconfigController) GroupVersionKind() schema.GroupVersionKind {
 
 func (c *kubeconfigController) Cache() KubeconfigCache {
 	return &kubeconfigCache{
-		lister:  c.informer.Lister(),
-		indexer: c.informer.Informer().GetIndexer(),
+		indexer:  c.Informer().GetIndexer(),
+		resource: c.groupResource,
 	}
 }
 
 func (c *kubeconfigController) Create(obj *v1alpha1.Kubeconfig) (*v1alpha1.Kubeconfig, error) {
-	return c.clientGetter.Kubeconfigs().Create(obj)
+	result := &v1alpha1.Kubeconfig{}
+	return result, c.client.Create(context.TODO(), "", obj, result, metav1.CreateOptions{})
 }
 
 func (c *kubeconfigController) Update(obj *v1alpha1.Kubeconfig) (*v1alpha1.Kubeconfig, error) {
-	return c.clientGetter.Kubeconfigs().Update(obj)
+	result := &v1alpha1.Kubeconfig{}
+	return result, c.client.Update(context.TODO(), "", obj, result, metav1.UpdateOptions{})
 }
 
 func (c *kubeconfigController) Delete(name string, options *metav1.DeleteOptions) error {
-	return c.clientGetter.Kubeconfigs().Delete(name, options)
+	if options == nil {
+		options = &metav1.DeleteOptions{}
+	}
+	return c.client.Delete(context.TODO(), "", name, *options)
 }
 
 func (c *kubeconfigController) Get(name string, options metav1.GetOptions) (*v1alpha1.Kubeconfig, error) {
-	return c.clientGetter.Kubeconfigs().Get(name, options)
+	result := &v1alpha1.Kubeconfig{}
+	return result, c.client.Get(context.TODO(), "", name, result, options)
 }
 
 func (c *kubeconfigController) List(opts metav1.ListOptions) (*v1alpha1.KubeconfigList, error) {
-	return c.clientGetter.Kubeconfigs().List(opts)
+	result := &v1alpha1.KubeconfigList{}
+	return result, c.client.List(context.TODO(), "", result, opts)
 }
 
 func (c *kubeconfigController) Watch(opts metav1.ListOptions) (watch.Interface, error) {
-	return c.clientGetter.Kubeconfigs().Watch(opts)
+	return c.client.Watch(context.TODO(), "", opts)
 }
 
-func (c *kubeconfigController) Patch(name string, pt types.PatchType, data []byte, subresources ...string) (result *v1alpha1.Kubeconfig, err error) {
-	return c.clientGetter.Kubeconfigs().Patch(name, pt, data, subresources...)
+func (c *kubeconfigController) Patch(name string, pt types.PatchType, data []byte, subresources ...string) (*v1alpha1.Kubeconfig, error) {
+	result := &v1alpha1.Kubeconfig{}
+	return result, c.client.Patch(context.TODO(), "", name, pt, data, result, metav1.PatchOptions{}, subresources...)
 }
 
 type kubeconfigCache struct {
-	lister  listers.KubeconfigLister
-	indexer cache.Indexer
+	indexer  cache.Indexer
+	resource schema.GroupResource
 }
 
 func (c *kubeconfigCache) Get(name string) (*v1alpha1.Kubeconfig, error) {
-	return c.lister.Get(name)
+	obj, exists, err := c.indexer.GetByKey(name)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, errors.NewNotFound(c.resource, name)
+	}
+	return obj.(*v1alpha1.Kubeconfig), nil
 }
 
-func (c *kubeconfigCache) List(selector labels.Selector) ([]*v1alpha1.Kubeconfig, error) {
-	return c.lister.List(selector)
+func (c *kubeconfigCache) List(selector labels.Selector) (ret []*v1alpha1.Kubeconfig, err error) {
+
+	err = cache.ListAll(c.indexer, selector, func(m interface{}) {
+		ret = append(ret, m.(*v1alpha1.Kubeconfig))
+	})
+
+	return ret, err
 }
 
 func (c *kubeconfigCache) AddIndexer(indexName string, indexer KubeconfigIndexer) {
@@ -226,6 +248,7 @@ func (c *kubeconfigCache) GetByIndex(indexName, key string) (result []*v1alpha1.
 	if err != nil {
 		return nil, err
 	}
+	result = make([]*v1alpha1.Kubeconfig, 0, len(objs))
 	for _, obj := range objs {
 		result = append(result, obj.(*v1alpha1.Kubeconfig))
 	}
