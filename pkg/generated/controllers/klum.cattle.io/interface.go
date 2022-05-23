@@ -1,5 +1,5 @@
 /*
-Copyright 2020 Rancher Labs, Inc.
+Copyright 2022 Rancher Labs, Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,10 +19,8 @@ limitations under the License.
 package klum
 
 import (
-	clientset "github.com/ibuildthecloud/klum/pkg/generated/clientset/versioned"
 	v1alpha1 "github.com/ibuildthecloud/klum/pkg/generated/controllers/klum.cattle.io/v1alpha1"
-	informers "github.com/ibuildthecloud/klum/pkg/generated/informers/externalversions/klum.cattle.io"
-	"github.com/rancher/wrangler/pkg/generic"
+	"github.com/rancher/lasso/pkg/controller"
 )
 
 type Interface interface {
@@ -30,21 +28,16 @@ type Interface interface {
 }
 
 type group struct {
-	controllerManager *generic.ControllerManager
-	informers         informers.Interface
-	client            clientset.Interface
+	controllerFactory controller.SharedControllerFactory
 }
 
 // New returns a new Interface.
-func New(controllerManager *generic.ControllerManager, informers informers.Interface,
-	client clientset.Interface) Interface {
+func New(controllerFactory controller.SharedControllerFactory) Interface {
 	return &group{
-		controllerManager: controllerManager,
-		informers:         informers,
-		client:            client,
+		controllerFactory: controllerFactory,
 	}
 }
 
 func (g *group) V1alpha1() v1alpha1.Interface {
-	return v1alpha1.New(g.controllerManager, g.client.KlumV1alpha1(), g.informers.V1alpha1())
+	return v1alpha1.New(g.controllerFactory)
 }

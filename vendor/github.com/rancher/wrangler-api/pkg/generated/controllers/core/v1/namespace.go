@@ -22,9 +22,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/rancher/lasso/pkg/client"
+	"github.com/rancher/lasso/pkg/controller"
 	"github.com/rancher/wrangler/pkg/apply"
 	"github.com/rancher/wrangler/pkg/condition"
 	"github.com/rancher/wrangler/pkg/generic"
+	"github.com/rancher/wrangler/pkg/kv"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -35,9 +38,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/watch"
-	informers "k8s.io/client-go/informers/core/v1"
-	clientset "k8s.io/client-go/kubernetes/typed/core/v1"
-	listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -77,18 +77,22 @@ type NamespaceCache interface {
 type NamespaceIndexer func(obj *v1.Namespace) ([]string, error)
 
 type namespaceController struct {
-	controllerManager *generic.ControllerManager
-	clientGetter      clientset.NamespacesGetter
-	informer          informers.NamespaceInformer
-	gvk               schema.GroupVersionKind
+	controller    controller.SharedController
+	client        *client.Client
+	gvk           schema.GroupVersionKind
+	groupResource schema.GroupResource
 }
 
-func NewNamespaceController(gvk schema.GroupVersionKind, controllerManager *generic.ControllerManager, clientGetter clientset.NamespacesGetter, informer informers.NamespaceInformer) NamespaceController {
+func NewNamespaceController(gvk schema.GroupVersionKind, resource string, namespaced bool, controller controller.SharedControllerFactory) NamespaceController {
+	c := controller.ForResourceKind(gvk.GroupVersion().WithResource(resource), gvk.Kind, namespaced)
 	return &namespaceController{
-		controllerManager: controllerManager,
-		clientGetter:      clientGetter,
-		informer:          informer,
-		gvk:               gvk,
+		controller: c,
+		client:     c.Client(),
+		gvk:        gvk,
+		groupResource: schema.GroupResource{
+			Group:    gvk.Group,
+			Resource: resource,
+		},
 	}
 }
 
@@ -135,12 +139,11 @@ func UpdateNamespaceDeepCopyOnChange(client NamespaceClient, obj *v1.Namespace, 
 }
 
 func (c *namespaceController) AddGenericHandler(ctx context.Context, name string, handler generic.Handler) {
-	c.controllerManager.AddHandler(ctx, c.gvk, c.informer.Informer(), name, handler)
+	c.controller.RegisterHandler(ctx, name, controller.SharedControllerHandlerFunc(handler))
 }
 
 func (c *namespaceController) AddGenericRemoveHandler(ctx context.Context, name string, handler generic.Handler) {
-	removeHandler := generic.NewRemoveHandler(name, c.Updater(), handler)
-	c.controllerManager.AddHandler(ctx, c.gvk, c.informer.Informer(), name, removeHandler)
+	c.AddGenericHandler(ctx, name, generic.NewRemoveHandler(name, c.Updater(), handler))
 }
 
 func (c *namespaceController) OnChange(ctx context.Context, name string, sync NamespaceHandler) {
@@ -148,20 +151,19 @@ func (c *namespaceController) OnChange(ctx context.Context, name string, sync Na
 }
 
 func (c *namespaceController) OnRemove(ctx context.Context, name string, sync NamespaceHandler) {
-	removeHandler := generic.NewRemoveHandler(name, c.Updater(), FromNamespaceHandlerToHandler(sync))
-	c.AddGenericHandler(ctx, name, removeHandler)
+	c.AddGenericHandler(ctx, name, generic.NewRemoveHandler(name, c.Updater(), FromNamespaceHandlerToHandler(sync)))
 }
 
 func (c *namespaceController) Enqueue(name string) {
-	c.controllerManager.Enqueue(c.gvk, c.informer.Informer(), "", name)
+	c.controller.Enqueue("", name)
 }
 
 func (c *namespaceController) EnqueueAfter(name string, duration time.Duration) {
-	c.controllerManager.EnqueueAfter(c.gvk, c.informer.Informer(), "", name, duration)
+	c.controller.EnqueueAfter("", name, duration)
 }
 
 func (c *namespaceController) Informer() cache.SharedIndexInformer {
-	return c.informer.Informer()
+	return c.controller.Informer()
 }
 
 func (c *namespaceController) GroupVersionKind() schema.GroupVersionKind {
@@ -170,54 +172,75 @@ func (c *namespaceController) GroupVersionKind() schema.GroupVersionKind {
 
 func (c *namespaceController) Cache() NamespaceCache {
 	return &namespaceCache{
-		lister:  c.informer.Lister(),
-		indexer: c.informer.Informer().GetIndexer(),
+		indexer:  c.Informer().GetIndexer(),
+		resource: c.groupResource,
 	}
 }
 
 func (c *namespaceController) Create(obj *v1.Namespace) (*v1.Namespace, error) {
-	return c.clientGetter.Namespaces().Create(obj)
+	result := &v1.Namespace{}
+	return result, c.client.Create(context.TODO(), "", obj, result, metav1.CreateOptions{})
 }
 
 func (c *namespaceController) Update(obj *v1.Namespace) (*v1.Namespace, error) {
-	return c.clientGetter.Namespaces().Update(obj)
+	result := &v1.Namespace{}
+	return result, c.client.Update(context.TODO(), "", obj, result, metav1.UpdateOptions{})
 }
 
 func (c *namespaceController) UpdateStatus(obj *v1.Namespace) (*v1.Namespace, error) {
-	return c.clientGetter.Namespaces().UpdateStatus(obj)
+	result := &v1.Namespace{}
+	return result, c.client.UpdateStatus(context.TODO(), "", obj, result, metav1.UpdateOptions{})
 }
 
 func (c *namespaceController) Delete(name string, options *metav1.DeleteOptions) error {
-	return c.clientGetter.Namespaces().Delete(name, options)
+	if options == nil {
+		options = &metav1.DeleteOptions{}
+	}
+	return c.client.Delete(context.TODO(), "", name, *options)
 }
 
 func (c *namespaceController) Get(name string, options metav1.GetOptions) (*v1.Namespace, error) {
-	return c.clientGetter.Namespaces().Get(name, options)
+	result := &v1.Namespace{}
+	return result, c.client.Get(context.TODO(), "", name, result, options)
 }
 
 func (c *namespaceController) List(opts metav1.ListOptions) (*v1.NamespaceList, error) {
-	return c.clientGetter.Namespaces().List(opts)
+	result := &v1.NamespaceList{}
+	return result, c.client.List(context.TODO(), "", result, opts)
 }
 
 func (c *namespaceController) Watch(opts metav1.ListOptions) (watch.Interface, error) {
-	return c.clientGetter.Namespaces().Watch(opts)
+	return c.client.Watch(context.TODO(), "", opts)
 }
 
-func (c *namespaceController) Patch(name string, pt types.PatchType, data []byte, subresources ...string) (result *v1.Namespace, err error) {
-	return c.clientGetter.Namespaces().Patch(name, pt, data, subresources...)
+func (c *namespaceController) Patch(name string, pt types.PatchType, data []byte, subresources ...string) (*v1.Namespace, error) {
+	result := &v1.Namespace{}
+	return result, c.client.Patch(context.TODO(), "", name, pt, data, result, metav1.PatchOptions{}, subresources...)
 }
 
 type namespaceCache struct {
-	lister  listers.NamespaceLister
-	indexer cache.Indexer
+	indexer  cache.Indexer
+	resource schema.GroupResource
 }
 
 func (c *namespaceCache) Get(name string) (*v1.Namespace, error) {
-	return c.lister.Get(name)
+	obj, exists, err := c.indexer.GetByKey(name)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, errors.NewNotFound(c.resource, name)
+	}
+	return obj.(*v1.Namespace), nil
 }
 
-func (c *namespaceCache) List(selector labels.Selector) ([]*v1.Namespace, error) {
-	return c.lister.List(selector)
+func (c *namespaceCache) List(selector labels.Selector) (ret []*v1.Namespace, err error) {
+
+	err = cache.ListAll(c.indexer, selector, func(m interface{}) {
+		ret = append(ret, m.(*v1.Namespace))
+	})
+
+	return ret, err
 }
 
 func (c *namespaceCache) AddIndexer(indexName string, indexer NamespaceIndexer) {
@@ -233,6 +256,7 @@ func (c *namespaceCache) GetByIndex(indexName, key string) (result []*v1.Namespa
 	if err != nil {
 		return nil, err
 	}
+	result = make([]*v1.Namespace, 0, len(objs))
 	for _, obj := range objs {
 		result = append(result, obj.(*v1.Namespace))
 	}
@@ -263,6 +287,7 @@ func RegisterNamespaceGeneratingHandler(ctx context.Context, controller Namespac
 	if opts != nil {
 		statusHandler.opts = *opts
 	}
+	controller.OnChange(ctx, name, statusHandler.Remove)
 	RegisterNamespaceStatusHandler(ctx, controller, condition, name, statusHandler.Handle)
 }
 
@@ -277,7 +302,7 @@ func (a *namespaceStatusHandler) sync(key string, obj *v1.Namespace) (*v1.Namesp
 		return obj, nil
 	}
 
-	origStatus := obj.Status
+	origStatus := obj.Status.DeepCopy()
 	obj = obj.DeepCopy()
 	newStatus, err := a.handler(obj, obj.Status)
 	if err != nil {
@@ -285,19 +310,27 @@ func (a *namespaceStatusHandler) sync(key string, obj *v1.Namespace) (*v1.Namesp
 		newStatus = *origStatus.DeepCopy()
 	}
 
-	obj.Status = newStatus
 	if a.condition != "" {
 		if errors.IsConflict(err) {
-			a.condition.SetError(obj, "", nil)
+			a.condition.SetError(&newStatus, "", nil)
 		} else {
-			a.condition.SetError(obj, "", err)
+			a.condition.SetError(&newStatus, "", err)
 		}
 	}
-	if !equality.Semantic.DeepEqual(origStatus, obj.Status) {
+	if !equality.Semantic.DeepEqual(origStatus, &newStatus) {
+		if a.condition != "" {
+			// Since status has changed, update the lastUpdatedTime
+			a.condition.LastUpdated(&newStatus, time.Now().UTC().Format(time.RFC3339))
+		}
+
 		var newErr error
-		obj, newErr = a.client.UpdateStatus(obj)
+		obj.Status = newStatus
+		newObj, newErr := a.client.UpdateStatus(obj)
 		if err == nil {
 			err = newErr
+		}
+		if newErr == nil {
+			obj = newObj
 		}
 	}
 	return obj, err
@@ -311,29 +344,32 @@ type namespaceGeneratingHandler struct {
 	name  string
 }
 
+func (a *namespaceGeneratingHandler) Remove(key string, obj *v1.Namespace) (*v1.Namespace, error) {
+	if obj != nil {
+		return obj, nil
+	}
+
+	obj = &v1.Namespace{}
+	obj.Namespace, obj.Name = kv.RSplit(key, "/")
+	obj.SetGroupVersionKind(a.gvk)
+
+	return nil, generic.ConfigureApplyForObject(a.apply, obj, &a.opts).
+		WithOwner(obj).
+		WithSetID(a.name).
+		ApplyObjects()
+}
+
 func (a *namespaceGeneratingHandler) Handle(obj *v1.Namespace, status v1.NamespaceStatus) (v1.NamespaceStatus, error) {
+	if !obj.DeletionTimestamp.IsZero() {
+		return status, nil
+	}
+
 	objs, newStatus, err := a.NamespaceGeneratingHandler(obj, status)
 	if err != nil {
 		return newStatus, err
 	}
 
-	apply := a.apply
-
-	if !a.opts.DynamicLookup {
-		apply = apply.WithStrictCaching()
-	}
-
-	if !a.opts.AllowCrossNamespace && !a.opts.AllowClusterScoped {
-		apply = apply.WithSetOwnerReference(true, false).
-			WithDefaultNamespace(obj.GetNamespace()).
-			WithListerNamespace(obj.GetNamespace())
-	}
-
-	if !a.opts.AllowClusterScoped {
-		apply = apply.WithRestrictClusterScoped()
-	}
-
-	return newStatus, apply.
+	return newStatus, generic.ConfigureApplyForObject(a.apply, obj, &a.opts).
 		WithOwner(obj).
 		WithSetID(a.name).
 		ApplyObjects(objs...)

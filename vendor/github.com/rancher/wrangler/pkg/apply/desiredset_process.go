@@ -1,17 +1,21 @@
 package apply
 
 import (
+	"context"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/pkg/errors"
 	gvk2 "github.com/rancher/wrangler/pkg/gvk"
 	"github.com/rancher/wrangler/pkg/merr"
 	"github.com/rancher/wrangler/pkg/objectset"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 	errors2 "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -28,17 +32,25 @@ var (
 )
 
 func (o *desiredSet) getControllerAndClient(debugID string, gvk schema.GroupVersionKind) (cache.SharedIndexInformer, dynamic.NamespaceableResourceInterface, error) {
+	// client needs to be accessed first so that the gvk->gvr mapping gets cached
+	client, err := o.a.clients.client(gvk)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	informer, ok := o.pruneTypes[gvk]
 	if !ok {
 		informer = o.a.informers[gvk]
 	}
-	if informer == nil && o.strictCaching {
-		return nil, nil, fmt.Errorf("failed to find informer for %s for %s", gvk, debugID)
+	if informer == nil && o.informerFactory != nil {
+		newInformer, err := o.informerFactory.Get(gvk, o.a.clients.gvr(gvk))
+		if err != nil {
+			return nil, nil, errors.Wrapf(err, "failed to construct informer for %v for %s", gvk, debugID)
+		}
+		informer = newInformer
 	}
-
-	client, err := o.a.clients.client(gvk)
-	if err != nil {
-		return nil, nil, err
+	if informer == nil && o.strictCaching {
+		return nil, nil, fmt.Errorf("failed to find informer for %s for %s: %w", gvk, debugID, ErrNoInformerFound)
 	}
 
 	return informer, client, nil
@@ -53,17 +65,29 @@ func (o *desiredSet) assignOwnerReference(gvk schema.GroupVersionKind, objs map[
 		return err
 	}
 	ownerGVK, err := gvk2.Get(o.owner)
-	ownerNSed := o.a.clients.IsNamespaced(ownerGVK)
+	if err != nil {
+		return err
+	}
+	ownerNSed, err := o.a.clients.IsNamespaced(ownerGVK)
+	if err != nil {
+		return err
+	}
 
 	for k, v := range objs {
 		// can't set owners across boundaries
-		if ownerNSed && !o.a.clients.IsNamespaced(gvk) {
-			continue
+		if ownerNSed {
+			if nsed, err := o.a.clients.IsNamespaced(gvk); err != nil {
+				return err
+			} else if !nsed {
+				continue
+			}
 		}
 
 		assignNS := false
 		assignOwner := true
-		if o.a.clients.IsNamespaced(gvk) {
+		if nsed, err := o.a.clients.IsNamespaced(gvk); err != nil {
+			return err
+		} else if nsed {
 			if k.Namespace == "" {
 				assignNS = true
 			} else if k.Namespace != ownerMeta.GetNamespace() && ownerNSed {
@@ -162,10 +186,25 @@ func (o *desiredSet) clearNamespace(objs map[objectset.ObjectKey]runtime.Object)
 func (o *desiredSet) createPatcher(client dynamic.NamespaceableResourceInterface) Patcher {
 	return func(namespace, name string, pt types2.PatchType, data []byte) (object runtime.Object, e error) {
 		if namespace != "" {
-			return client.Namespace(namespace).Patch(name, pt, data, v1.PatchOptions{})
+			return client.Namespace(namespace).Patch(o.ctx, name, pt, data, v1.PatchOptions{})
 		}
-		return client.Patch(name, pt, data, v1.PatchOptions{})
+		return client.Patch(o.ctx, name, pt, data, v1.PatchOptions{})
 	}
+}
+
+func (o *desiredSet) filterCrossVersion(gvk schema.GroupVersionKind, keys []objectset.ObjectKey) []objectset.ObjectKey {
+	result := make([]objectset.ObjectKey, 0, len(keys))
+	gk := gvk.GroupKind()
+	for _, key := range keys {
+		if o.objs.Contains(gk, key) {
+			continue
+		}
+		if key.Namespace == o.defaultNamespace && o.objs.Contains(gk, objectset.ObjectKey{Name: key.Name}) {
+			continue
+		}
+		result = append(result, key)
+	}
+	return result
 }
 
 func (o *desiredSet) process(debugID string, set labels.Selector, gvk schema.GroupVersionKind, objs map[objectset.ObjectKey]runtime.Object) {
@@ -175,14 +214,18 @@ func (o *desiredSet) process(debugID string, set labels.Selector, gvk schema.Gro
 		return
 	}
 
-	nsed := o.a.clients.IsNamespaced(gvk)
+	nsed, err := o.a.clients.IsNamespaced(gvk)
+	if err != nil {
+		o.err(err)
+		return
+	}
 
 	if !nsed && o.restrictClusterScoped {
 		o.err(fmt.Errorf("invalid cluster scoped gvk: %v", gvk))
 		return
 	}
 
-	if o.setOwnerReference {
+	if o.setOwnerReference && o.owner != nil {
 		if err := o.assignOwnerReference(gvk, objs); err != nil {
 			o.err(err)
 			return
@@ -206,13 +249,38 @@ func (o *desiredSet) process(debugID string, set labels.Selector, gvk schema.Gro
 		patcher = o.createPatcher(client)
 	}
 
-	existing, err := o.list(controller, client, set)
+	reconciler := o.reconcilers[gvk]
+
+	existing, err := o.list(nsed, controller, client, set, objs)
 	if err != nil {
 		o.err(errors.Wrapf(err, "failed to list %s for %s", gvk, debugID))
 		return
 	}
 
 	toCreate, toDelete, toUpdate := compareSets(existing, objs)
+
+	// check for resources in the objectset but under a different version of the same group/kind
+	toDelete = o.filterCrossVersion(gvk, toDelete)
+
+	if o.createPlan {
+		o.plan.Create[gvk] = toCreate
+		o.plan.Delete[gvk] = toDelete
+
+		reconciler = nil
+		patcher = func(namespace, name string, pt types2.PatchType, data []byte) (runtime.Object, error) {
+			data, err := sanitizePatch(data, true)
+			if err != nil {
+				return nil, err
+			}
+			if string(data) != "{}" {
+				o.plan.Update.Add(gvk, namespace, name, string(data))
+			}
+			return nil, nil
+		}
+
+		toCreate = nil
+		toDelete = nil
+	}
 
 	createF := func(k objectset.ObjectKey) {
 		obj := objs[k]
@@ -239,8 +307,8 @@ func (o *desiredSet) process(debugID string, set labels.Selector, gvk schema.Gro
 		logrus.Debugf("DesiredSet - Created %s %s for %s", gvk, k, debugID)
 	}
 
-	deleteF := func(k objectset.ObjectKey) {
-		if err := o.delete(nsed, k.Namespace, k.Name, client); err != nil {
+	deleteF := func(k objectset.ObjectKey, force bool) {
+		if err := o.delete(nsed, k.Namespace, k.Name, client, force, gvk); err != nil {
 			o.err(errors.Wrapf(err, "failed to delete %s %s for %s", k, gvk, debugID))
 			return
 		}
@@ -248,9 +316,9 @@ func (o *desiredSet) process(debugID string, set labels.Selector, gvk schema.Gro
 	}
 
 	updateF := func(k objectset.ObjectKey) {
-		err := o.compareObjects(gvk, patcher, client, debugID, existing[k], objs[k], len(toCreate) > 0 || len(toDelete) > 0)
+		err := o.compareObjects(gvk, reconciler, patcher, client, debugID, existing[k], objs[k], len(toCreate) > 0 || len(toDelete) > 0)
 		if err == ErrReplace {
-			deleteF(k)
+			deleteF(k, true)
 			o.err(fmt.Errorf("DesiredSet - Replace Wait %s %s for %s", gvk, k, debugID))
 		} else if err != nil {
 			o.err(errors.Wrapf(err, "failed to update %s %s for %s", k, gvk, debugID))
@@ -266,42 +334,46 @@ func (o *desiredSet) process(debugID string, set labels.Selector, gvk schema.Gro
 	}
 
 	for _, k := range toDelete {
-		deleteF(k)
+		deleteF(k, false)
 	}
 }
 
-func (o *desiredSet) list(informer cache.SharedIndexInformer, client dynamic.NamespaceableResourceInterface, selector labels.Selector) (map[objectset.ObjectKey]runtime.Object, error) {
+func (o *desiredSet) list(namespaced bool, informer cache.SharedIndexInformer, client dynamic.NamespaceableResourceInterface,
+	selector labels.Selector, desiredObjects map[objectset.ObjectKey]runtime.Object) (map[objectset.ObjectKey]runtime.Object, error) {
 	var (
 		errs []error
 		objs = map[objectset.ObjectKey]runtime.Object{}
 	)
 
 	if informer == nil {
-		var c dynamic.ResourceInterface
+		// if a lister namespace is set assume all objects belong to the listerNamespace
+		// otherwise use distinct namespaces from the desired objects
+		// (even if not namespaced as we'll get a single empty namespace in this case which is working OK)
+		var namespaces []string
 		if o.listerNamespace != "" {
-			c = client.Namespace(o.listerNamespace)
+			namespaces = append(namespaces, o.listerNamespace)
 		} else {
-			c = client
+			namespaces = getDistinctNamespaces(desiredObjects)
 		}
 
-		list, err := c.List(v1.ListOptions{
-			LabelSelector: selector.String(),
-		})
-		if err != nil {
-			return nil, err
-		}
-
-		for _, obj := range list.Items {
-			copy := obj
-			if err := addObjectToMap(objs, &copy); err != nil {
+		err := multiNamespaceList(o.ctx, namespaces, client, selector, func(obj unstructured.Unstructured) {
+			if err := addObjectToMap(objs, &obj); err != nil {
 				errs = append(errs, err)
 			}
+		})
+		if err != nil {
+			errs = append(errs, err)
 		}
 
 		return objs, merr.NewErrors(errs...)
 	}
 
-	err := cache.ListAllByNamespace(informer.GetIndexer(), "", selector, func(obj interface{}) {
+	var namespace string
+	if namespaced {
+		namespace = o.listerNamespace
+	}
+
+	err := cache.ListAllByNamespace(informer.GetIndexer(), namespace, selector, func(obj interface{}) {
 		if err := addObjectToMap(objs, obj); err != nil {
 			errs = append(errs, err)
 		}
@@ -313,6 +385,14 @@ func (o *desiredSet) list(informer cache.SharedIndexInformer, client dynamic.Nam
 	return objs, merr.NewErrors(errs...)
 }
 
+func shouldPrune(obj runtime.Object) bool {
+	meta, err := meta.Accessor(obj)
+	if err != nil {
+		return true
+	}
+	return meta.GetLabels()[LabelPrune] != "false"
+}
+
 func compareSets(existingSet, newSet map[objectset.ObjectKey]runtime.Object) (toCreate, toDelete, toUpdate []objectset.ObjectKey) {
 	for k := range newSet {
 		if _, ok := existingSet[k]; ok {
@@ -322,9 +402,11 @@ func compareSets(existingSet, newSet map[objectset.ObjectKey]runtime.Object) (to
 		}
 	}
 
-	for k := range existingSet {
+	for k, obj := range existingSet {
 		if _, ok := newSet[k]; !ok {
-			toDelete = append(toDelete, k)
+			if shouldPrune(obj) {
+				toDelete = append(toDelete, k)
+			}
 		}
 	}
 
@@ -353,4 +435,53 @@ func addObjectToMap(objs map[objectset.ObjectKey]runtime.Object, obj interface{}
 	}] = obj.(runtime.Object)
 
 	return nil
+}
+
+// multiNamespaceList lists objects across all given namespaces, because requests are concurrent it is possible for appendFn to be called before errors are reported.
+func multiNamespaceList(ctx context.Context, namespaces []string, baseClient dynamic.NamespaceableResourceInterface, selector labels.Selector, appendFn func(obj unstructured.Unstructured)) error {
+	var mu sync.Mutex
+	wg, _ctx := errgroup.WithContext(ctx)
+
+	// list all namespaces concurrently
+	for _, namespace := range namespaces {
+		namespace := namespace
+		wg.Go(func() error {
+			list, err := baseClient.Namespace(namespace).List(_ctx, v1.ListOptions{
+				LabelSelector: selector.String(),
+			})
+			if err != nil {
+				return err
+			}
+
+			mu.Lock()
+			for _, obj := range list.Items {
+				appendFn(obj)
+			}
+			mu.Unlock()
+
+			return nil
+		})
+	}
+
+	return wg.Wait()
+}
+
+func getDistinctNamespaces(objs map[objectset.ObjectKey]runtime.Object) (namespaces []string) {
+	for objKey, _ := range objs {
+		var duplicate bool
+		for i := range namespaces {
+			if namespaces[i] == objKey.Namespace {
+				duplicate = true
+				break
+			}
+		}
+
+		if duplicate {
+			continue
+		}
+
+		namespaces = append(namespaces, objKey.Namespace)
+	}
+
+	return
 }

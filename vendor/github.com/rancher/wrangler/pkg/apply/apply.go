@@ -1,6 +1,7 @@
 package apply
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -11,7 +12,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 )
@@ -27,17 +27,45 @@ type Reconciler func(oldObj runtime.Object, newObj runtime.Object) (bool, error)
 
 type ClientFactory func(gvr schema.GroupVersionResource) (dynamic.NamespaceableResourceInterface, error)
 
+type InformerFactory interface {
+	Get(gvk schema.GroupVersionKind, gvr schema.GroupVersionResource) (cache.SharedIndexInformer, error)
+}
+
 type InformerGetter interface {
 	Informer() cache.SharedIndexInformer
 	GroupVersionKind() schema.GroupVersionKind
 }
 
+type PatchByGVK map[schema.GroupVersionKind]map[objectset.ObjectKey]string
+
+func (p PatchByGVK) Add(gvk schema.GroupVersionKind, namespace, name, patch string) {
+	d, ok := p[gvk]
+	if !ok {
+		d = map[objectset.ObjectKey]string{}
+		p[gvk] = d
+	}
+	d[objectset.ObjectKey{
+		Name:      name,
+		Namespace: namespace,
+	}] = patch
+}
+
+type Plan struct {
+	Create  objectset.ObjectKeyByGVK
+	Delete  objectset.ObjectKeyByGVK
+	Update  PatchByGVK
+	Objects []runtime.Object
+}
+
 type Apply interface {
 	Apply(set *objectset.ObjectSet) error
 	ApplyObjects(objs ...runtime.Object) error
+	WithContext(ctx context.Context) Apply
 	WithCacheTypes(igs ...InformerGetter) Apply
+	WithCacheTypeFactory(factory InformerFactory) Apply
 	WithSetID(id string) Apply
 	WithOwner(obj runtime.Object) Apply
+	WithOwnerKey(key string, gvk schema.GroupVersionKind) Apply
 	WithInjector(injs ...injectors.ConfigInjector) Apply
 	WithInjectorName(injs ...string) Apply
 	WithPatcher(gvk schema.GroupVersionKind, patchers Patcher) Apply
@@ -49,17 +77,24 @@ type Apply interface {
 	WithListerNamespace(ns string) Apply
 	WithRateLimiting(ratelimitingQps float32) Apply
 	WithNoDelete() Apply
+	WithNoDeleteGVK(gvks ...schema.GroupVersionKind) Apply
 	WithGVK(gvks ...schema.GroupVersionKind) Apply
 	WithSetOwnerReference(controller, block bool) Apply
+	WithIgnorePreviousApplied() Apply
+	WithDiffPatch(gvk schema.GroupVersionKind, namespace, name string, patch []byte) Apply
+
+	FindOwner(obj runtime.Object) (runtime.Object, error)
+	PurgeOrphan(obj runtime.Object) error
+	DryRun(objs ...runtime.Object) (Plan, error)
 }
 
 func NewForConfig(cfg *rest.Config) (Apply, error) {
-	k8s, err := kubernetes.NewForConfig(cfg)
+	discovery, err := discovery.NewDiscoveryClientForConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	return New(k8s.Discovery(), NewClientFactory(cfg)), nil
+	return New(discovery, NewClientFactory(cfg)), nil
 }
 
 func New(discovery discovery.DiscoveryInterface, cf ClientFactory, igs ...InformerGetter) Apply {
@@ -68,6 +103,7 @@ func New(discovery discovery.DiscoveryInterface, cf ClientFactory, igs ...Inform
 			clientFactory: cf,
 			discovery:     discovery,
 			namespaced:    map[schema.GroupVersionKind]bool{},
+			gvkToGVR:      map[schema.GroupVersionKind]schema.GroupVersionResource{},
 			clients:       map[schema.GroupVersionKind]dynamic.NamespaceableResourceInterface{},
 		},
 		informers: map[schema.GroupVersionKind]cache.SharedIndexInformer{},
@@ -91,13 +127,32 @@ type clients struct {
 	clientFactory ClientFactory
 	discovery     discovery.DiscoveryInterface
 	namespaced    map[schema.GroupVersionKind]bool
+	gvkToGVR      map[schema.GroupVersionKind]schema.GroupVersionResource
 	clients       map[schema.GroupVersionKind]dynamic.NamespaceableResourceInterface
 }
 
-func (c *clients) IsNamespaced(gvk schema.GroupVersionKind) bool {
+func (c *clients) IsNamespaced(gvk schema.GroupVersionKind) (bool, error) {
+	c.Lock()
+	ok, exists := c.namespaced[gvk]
+	c.Unlock()
+
+	if exists {
+		return ok, nil
+	}
+	_, err := c.client(gvk)
+	if err != nil {
+		return false, err
+	}
+
 	c.Lock()
 	defer c.Unlock()
-	return c.namespaced[gvk]
+	return c.namespaced[gvk], nil
+}
+
+func (c *clients) gvr(gvk schema.GroupVersionKind) schema.GroupVersionResource {
+	c.Lock()
+	defer c.Unlock()
+	return c.gvkToGVR[gvk]
 }
 
 func (c *clients) client(gvk schema.GroupVersionKind) (dynamic.NamespaceableResourceInterface, error) {
@@ -125,6 +180,7 @@ func (c *clients) client(gvk schema.GroupVersionKind) (dynamic.NamespaceableReso
 
 		c.namespaced[gvk] = resource.Namespaced
 		c.clients[gvk] = client
+		c.gvkToGVR[gvk] = gvk.GroupVersion().WithResource(resource.Name)
 		return client, nil
 	}
 
@@ -135,10 +191,15 @@ func (a *apply) newDesiredSet() desiredSet {
 	return desiredSet{
 		a:                a,
 		defaultNamespace: defaultNamespace,
+		ctx:              context.Background(),
 		ratelimitingQps:  1,
 		reconcilers:      defaultReconcilers,
 		strictCaching:    true,
 	}
+}
+
+func (a *apply) DryRun(objs ...runtime.Object) (Plan, error) {
+	return a.newDesiredSet().DryRun(objs...)
 }
 
 func (a *apply) Apply(set *objectset.ObjectSet) error {
@@ -159,6 +220,10 @@ func (a *apply) WithOwner(obj runtime.Object) Apply {
 	return a.newDesiredSet().WithOwner(obj)
 }
 
+func (a *apply) WithOwnerKey(key string, gvk schema.GroupVersionKind) Apply {
+	return a.newDesiredSet().WithOwnerKey(key, gvk)
+}
+
 func (a *apply) WithInjector(injs ...injectors.ConfigInjector) Apply {
 	return a.newDesiredSet().WithInjector(injs...)
 }
@@ -169,6 +234,10 @@ func (a *apply) WithInjectorName(injs ...string) Apply {
 
 func (a *apply) WithCacheTypes(igs ...InformerGetter) Apply {
 	return a.newDesiredSet().WithCacheTypes(igs...)
+}
+
+func (a *apply) WithCacheTypeFactory(factory InformerFactory) Apply {
+	return a.newDesiredSet().WithCacheTypeFactory(factory)
 }
 
 func (a *apply) WithGVK(gvks ...schema.GroupVersionKind) Apply {
@@ -211,6 +280,30 @@ func (a *apply) WithNoDelete() Apply {
 	return a.newDesiredSet().WithNoDelete()
 }
 
+func (a *apply) WithNoDeleteGVK(gvks ...schema.GroupVersionKind) Apply {
+	return a.newDesiredSet().WithNoDeleteGVK(gvks...)
+}
+
 func (a *apply) WithSetOwnerReference(controller, block bool) Apply {
 	return a.newDesiredSet().WithSetOwnerReference(controller, block)
+}
+
+func (a *apply) WithContext(ctx context.Context) Apply {
+	return a.newDesiredSet().WithContext(ctx)
+}
+
+func (a *apply) WithIgnorePreviousApplied() Apply {
+	return a.newDesiredSet().WithIgnorePreviousApplied()
+}
+
+func (a *apply) FindOwner(obj runtime.Object) (runtime.Object, error) {
+	return a.newDesiredSet().FindOwner(obj)
+}
+
+func (a *apply) PurgeOrphan(obj runtime.Object) error {
+	return a.newDesiredSet().PurgeOrphan(obj)
+}
+
+func (a *apply) WithDiffPatch(gvk schema.GroupVersionKind, namespace, name string, patch []byte) Apply {
+	return a.newDesiredSet().WithDiffPatch(gvk, namespace, name, patch)
 }
