@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"strings"
+	"text/template"
 
 	klum "github.com/ibuildthecloud/klum/pkg/apis/klum.cattle.io/v1alpha1"
 	"github.com/ibuildthecloud/klum/pkg/generated/controllers/klum.cattle.io/v1alpha1"
@@ -214,6 +216,13 @@ func (h *handler) OnSecretChange(key string, secret *v1.Secret) (*v1.Secret, err
 	}
 	token := string(secret.Data["token"])
 
+	var contextName strings.Builder
+	template.Must(template.New("").Parse(h.cfg.ContextName)).Execute(&contextName, struct {
+		UserName string
+	}{
+		UserName: userName,
+	})
+
 	return secret, h.apply.
 		WithOwner(secret).
 		WithSetOwnerReference(true, false).
@@ -224,7 +233,7 @@ func (h *handler) OnSecretChange(key string, secret *v1.Secret) (*v1.Secret, err
 			Spec: klum.KubeconfigSpec{
 				Clusters: []klum.NamedCluster{
 					{
-						Name: h.cfg.ContextName,
+						Name: contextName.String(),
 						Cluster: klum.Cluster{
 							Server:                   h.cfg.Server,
 							CertificateAuthorityData: ca,
@@ -233,7 +242,7 @@ func (h *handler) OnSecretChange(key string, secret *v1.Secret) (*v1.Secret, err
 				},
 				AuthInfos: []klum.NamedAuthInfo{
 					{
-						Name: h.cfg.ContextName,
+						Name: contextName.String(),
 						AuthInfo: klum.AuthInfo{
 							Token: token,
 						},
@@ -241,14 +250,14 @@ func (h *handler) OnSecretChange(key string, secret *v1.Secret) (*v1.Secret, err
 				},
 				Contexts: []klum.NamedContext{
 					{
-						Name: h.cfg.ContextName,
+						Name: contextName.String(),
 						Context: klum.Context{
-							Cluster:  h.cfg.ContextName,
-							AuthInfo: h.cfg.ContextName,
+							Cluster:  contextName.String(),
+							AuthInfo: contextName.String(),
 						},
 					},
 				},
-				CurrentContext: h.cfg.ContextName,
+				CurrentContext: contextName.String(),
 			},
 		})
 }

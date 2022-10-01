@@ -85,6 +85,8 @@ GLOBAL OPTIONS:
    --ca value                    The value of the CA data to put in the Kubeconfig [$CA]
    --default-cluster-role value  Default cluster-role to assign to users with no roles (default: "cluster-admin") [$DEFAULT_CLUSTER_ROLE]
 ```
+Note: CONTEXT_NAME is golang tempate avare. The only available context var is UserName. For example
+if you want to postfix contextname with username, set CONTEXT_NAME=`default-{{ .UserName }}`.
 
 ## Building
 
