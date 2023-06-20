@@ -6,6 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"k8s.io/apimachinery/pkg/version"
+	"log"
+	"strconv"
 
 	klum "github.com/ibuildthecloud/klum/pkg/apis/klum.cattle.io/v1alpha1"
 	"github.com/ibuildthecloud/klum/pkg/generated/controllers/klum.cattle.io/v1alpha1"
@@ -38,18 +41,20 @@ func Register(ctx context.Context,
 	rb rbaccontroller.RoleBindingController,
 	secrets v1controller.SecretController,
 	kconfig v1alpha1.KubeconfigController,
-	user v1alpha1.UserController) {
+	user v1alpha1.UserController,
+	k8sversion *version.Info) {
 
 	h := &handler{
 		cfg:             cfg,
 		apply:           apply.WithCacheTypes(kconfig),
 		serviceAccounts: serviceAccount.Cache(),
+		k8sversion:      k8sversion,
 	}
 
 	v1alpha1.RegisterUserGeneratingHandler(ctx,
 		user,
 		apply.WithCacheTypes(serviceAccount,
-			crb, rb),
+			crb, rb, secrets),
 		"",
 		"klum-user",
 		h.OnUserChange,
@@ -64,12 +69,18 @@ type handler struct {
 	cfg             Config
 	apply           apply.Apply
 	serviceAccounts v1controller.ServiceAccountCache
+	k8sversion      *version.Info
 }
 
 func (h *handler) OnUserChange(user *klum.User, status klum.UserStatus) ([]runtime.Object, klum.UserStatus, error) {
 	if user.Spec.Enabled != nil && !*user.Spec.Enabled {
 		status = setReady(status, false)
 		return nil, status, nil
+	}
+
+	intVersion, err := strconv.Atoi(h.k8sversion.Minor)
+	if err != nil {
+		log.Fatalf("invalid kubernetes minor version: %v", err)
 	}
 
 	objs := []runtime.Object{
@@ -83,6 +94,22 @@ func (h *handler) OnUserChange(user *klum.User, status klum.UserStatus) ([]runti
 			},
 		},
 	}
+
+	if intVersion >= 24 {
+		objs = append(objs,
+			&v1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      user.Name,
+					Namespace: h.cfg.Namespace,
+					Annotations: map[string]string{
+						"kubernetes.io/service-account.name": user.Name,
+					},
+				},
+				Type: v1.SecretTypeServiceAccountToken,
+			},
+		)
+	}
+
 	objs = append(objs, h.getRoles(user)...)
 
 	return objs, setReady(status, true), nil

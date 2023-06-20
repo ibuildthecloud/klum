@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"k8s.io/client-go/discovery"
 	"os"
 
 	"github.com/ibuildthecloud/klum/pkg/controllers/user"
@@ -89,6 +90,16 @@ func run(c *cli.Context) error {
 		return err
 	}
 
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(restConfig)
+	if err != nil {
+		return err
+	}
+
+	k8sversion, err := discoveryClient.ServerVersion()
+	if err != nil {
+		return err
+	}
+
 	if err := crd.Create(ctx, restConfig); err != nil {
 		return err
 	}
@@ -121,7 +132,9 @@ func run(c *cli.Context) error {
 		rbac.Rbac().V1().RoleBinding(),
 		core.Core().V1().Secret(),
 		klum.Klum().V1alpha1().Kubeconfig(),
-		klum.Klum().V1alpha1().User())
+		klum.Klum().V1alpha1().User(),
+		k8sversion,
+	)
 
 	if err := start.All(ctx, 2, klum, core, rbac); err != nil {
 		logrus.Fatalf("Error starting: %s", err.Error())
