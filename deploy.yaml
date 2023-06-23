@@ -24,7 +24,7 @@ spec:
     spec:
       serviceAccountName: klum
       containers:
-      - image: ghcr.io/jadolg/klum:0.2.0
+      - image: ghcr.io/jadolg/klum:v0.2.0
         name: klum
         args:
           - /klum
