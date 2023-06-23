@@ -1,4 +1,4 @@
-module github.com/ibuildthecloud/klum
+module github.com/jadolg/klum
 
 go 1.20
 

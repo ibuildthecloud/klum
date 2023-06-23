@@ -10,8 +10,8 @@ import (
 	"log"
 	"strconv"
 
-	klum "github.com/ibuildthecloud/klum/pkg/apis/klum.cattle.io/v1alpha1"
-	"github.com/ibuildthecloud/klum/pkg/generated/controllers/klum.cattle.io/v1alpha1"
+	klum "github.com/jadolg/klum/pkg/apis/klum.cattle.io/v1alpha1"
+	"github.com/jadolg/klum/pkg/generated/controllers/klum.cattle.io/v1alpha1"
 	v1controller "github.com/rancher/wrangler-api/pkg/generated/controllers/core/v1"
 	rbaccontroller "github.com/rancher/wrangler-api/pkg/generated/controllers/rbac/v1"
 	"github.com/rancher/wrangler/pkg/apply"

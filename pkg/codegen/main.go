@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/ibuildthecloud/klum/pkg/apis/klum.cattle.io/v1alpha1"
+	"github.com/jadolg/klum/pkg/apis/klum.cattle.io/v1alpha1"
 	controllergen "github.com/rancher/wrangler/pkg/controller-gen"
 	"github.com/rancher/wrangler/pkg/controller-gen/args"
 )
@@ -11,7 +11,7 @@ import (
 func main() {
 	os.Unsetenv("GOPATH")
 	controllergen.Run(args.Options{
-		OutputPackage: "github.com/ibuildthecloud/klum/pkg/generated",
+		OutputPackage: "github.com/jadolg/klum/pkg/generated",
 		Boilerplate:   "scripts/boilerplate.go.txt",
 		Groups: map[string]args.Group{
 			"klum.cattle.io": {
