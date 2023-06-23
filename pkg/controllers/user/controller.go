@@ -6,9 +6,10 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"k8s.io/apimachinery/pkg/version"
 	"log"
 	"strconv"
+
+	"k8s.io/apimachinery/pkg/version"
 
 	klum "github.com/jadolg/klum/pkg/apis/klum.cattle.io/v1alpha1"
 	"github.com/jadolg/klum/pkg/generated/controllers/klum.cattle.io/v1alpha1"
