@@ -5,12 +5,12 @@ package main
 
 import (
 	"fmt"
+	"github.com/jadolg/klum/pkg/generated/controllers/klum.cattle.io"
 	"k8s.io/client-go/discovery"
 	"os"
 
-	"github.com/ibuildthecloud/klum/pkg/controllers/user"
-	"github.com/ibuildthecloud/klum/pkg/crd"
-	"github.com/ibuildthecloud/klum/pkg/generated/controllers/klum.cattle.io"
+	"github.com/jadolg/klum/pkg/controllers/user"
+	"github.com/jadolg/klum/pkg/crd"
 	"github.com/rancher/wrangler-api/pkg/generated/controllers/core"
 	"github.com/rancher/wrangler-api/pkg/generated/controllers/rbac"
 	"github.com/rancher/wrangler/pkg/apply"

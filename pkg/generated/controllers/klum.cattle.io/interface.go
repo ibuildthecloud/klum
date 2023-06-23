@@ -19,7 +19,7 @@ limitations under the License.
 package klum
 
 import (
-	v1alpha1 "github.com/ibuildthecloud/klum/pkg/generated/controllers/klum.cattle.io/v1alpha1"
+	v1alpha1 "github.com/jadolg/klum/pkg/generated/controllers/klum.cattle.io/v1alpha1"
 	"github.com/rancher/lasso/pkg/controller"
 )
 

@@ -19,7 +19,7 @@ limitations under the License.
 package v1alpha1
 
 import (
-	v1alpha1 "github.com/ibuildthecloud/klum/pkg/apis/klum.cattle.io/v1alpha1"
+	v1alpha1 "github.com/jadolg/klum/pkg/apis/klum.cattle.io/v1alpha1"
 	"github.com/rancher/lasso/pkg/controller"
 	"github.com/rancher/wrangler/pkg/schemes"
 	"k8s.io/apimachinery/pkg/runtime/schema"
