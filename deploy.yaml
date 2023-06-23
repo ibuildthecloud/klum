@@ -24,8 +24,12 @@ spec:
     spec:
       serviceAccountName: klum
       containers:
-      - image: ibuildthecloud/klum:v0.1.0-amd64
+      - image: ghcr.io/jadolg/klum:0.2.0
         name: klum
+        args:
+          - /klum
+          - "--context-name=mycluster"
+          - "--server=https://myserver.example.com:6443"
 
 ---
 
