@@ -5,9 +5,10 @@ package main
 
 import (
 	"fmt"
+	"os"
+
 	"github.com/jadolg/klum/pkg/generated/controllers/klum.cattle.io"
 	"k8s.io/client-go/discovery"
-	"os"
 
 	"github.com/jadolg/klum/pkg/controllers/user"
 	"github.com/jadolg/klum/pkg/crd"
