@@ -88,7 +88,7 @@ GLOBAL OPTIONS:
 
 ## Building
 
-`make` or just `go build`
+`go build`
 
 ![](https://media.giphy.com/media/3o7TKGMZHi73yzCumQ/giphy.gif)
 
