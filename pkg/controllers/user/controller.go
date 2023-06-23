@@ -50,6 +50,7 @@ func Register(ctx context.Context,
 		apply:           apply.WithCacheTypes(kconfig),
 		serviceAccounts: serviceAccount.Cache(),
 		k8sversion:      k8sversion,
+		kconfig:         kconfig,
 	}
 
 	v1alpha1.RegisterUserGeneratingHandler(ctx,
@@ -64,6 +65,7 @@ func Register(ctx context.Context,
 		})
 
 	secrets.OnChange(ctx, "klum-secret", h.OnSecretChange)
+	secrets.OnRemove(ctx, "klum-secret", h.OnSecretRemoved)
 }
 
 type handler struct {
@@ -71,6 +73,7 @@ type handler struct {
 	apply           apply.Apply
 	serviceAccounts v1controller.ServiceAccountCache
 	k8sversion      *version.Info
+	kconfig         v1alpha1.KubeconfigController
 }
 
 func (h *handler) OnUserChange(user *klum.User, status klum.UserStatus) ([]runtime.Object, klum.UserStatus, error) {
@@ -211,29 +214,38 @@ func name(user, namespace, clusterRole, role string) string {
 	return name2.SafeConcatName("klum", user, role, hex.EncodeToString(suffix[:])[:8])
 }
 
-func (h *handler) OnSecretChange(key string, secret *v1.Secret) (*v1.Secret, error) {
+func getUserNameForSecret(secret *v1.Secret, h *handler) (string, *v1.Secret, error, bool) {
 	if secret == nil {
-		return nil, nil
+		return "", nil, nil, true
 	}
 
 	if secret.Type != v1.SecretTypeServiceAccountToken {
-		return secret, nil
+		return "", secret, nil, true
 	}
 
 	sa, err := h.serviceAccounts.Get(secret.Namespace, secret.Annotations["kubernetes.io/service-account.name"])
 	if errors.IsNotFound(err) {
-		return secret, nil
+		return "", secret, nil, true
 	} else if err != nil {
-		return secret, err
+		return "", secret, nil, true
 	}
 
 	if sa.UID != types.UID(secret.Annotations["kubernetes.io/service-account.uid"]) {
-		return secret, nil
+		return "", secret, nil, true
 	}
 
 	userName := sa.Annotations["klum.cattle.io/user"]
 	if userName == "" {
-		return secret, nil
+		return "", secret, nil, true
+	}
+
+	return userName, nil, nil, false
+}
+
+func (h *handler) OnSecretChange(key string, secret *v1.Secret) (*v1.Secret, error) {
+	userName, v, err2, done := getUserNameForSecret(secret, h)
+	if done {
+		return v, err2
 	}
 
 	ca := h.cfg.CA
@@ -279,6 +291,25 @@ func (h *handler) OnSecretChange(key string, secret *v1.Secret) (*v1.Secret, err
 				CurrentContext: h.cfg.ContextName,
 			},
 		})
+}
+
+func (h *handler) OnSecretRemoved(key string, secret *v1.Secret) (*v1.Secret, error) {
+	userName, v, err2, done := getUserNameForSecret(secret, h)
+	if done {
+		return v, err2
+	}
+
+	_, err := h.kconfig.Get(userName, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	err = h.kconfig.Delete(userName, &metav1.DeleteOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, nil
 }
 
 func setReady(status klum.UserStatus, ready bool) klum.UserStatus {
