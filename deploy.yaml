@@ -26,10 +26,13 @@ spec:
       containers:
       - image: ghcr.io/jadolg/klum:v0.2.0
         name: klum
-        args:
-          - /klum
-          - "--context-name=mycluster"
-          - "--server=https://myserver.example.com:6443"
+        env:
+          - name: CONTEXT_NAME
+            value: mycluster
+          - name: SERVER
+            value: https://myserver.example.com:6443
+          - name: NAMESPACE
+            value: klum
 
 ---
 
