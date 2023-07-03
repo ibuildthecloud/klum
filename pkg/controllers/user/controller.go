@@ -273,7 +273,7 @@ func (h *handler) OnSecretChange(key string, secret *v1.Secret) (*v1.Secret, err
 				},
 				AuthInfos: []klum.NamedAuthInfo{
 					{
-						Name: h.cfg.ContextName,
+						Name: userName,
 						AuthInfo: klum.AuthInfo{
 							Token: token,
 						},
@@ -284,7 +284,7 @@ func (h *handler) OnSecretChange(key string, secret *v1.Secret) (*v1.Secret, err
 						Name: h.cfg.ContextName,
 						Context: klum.Context{
 							Cluster:  h.cfg.ContextName,
-							AuthInfo: h.cfg.ContextName,
+							AuthInfo: userName,
 						},
 					},
 				},
