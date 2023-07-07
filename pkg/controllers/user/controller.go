@@ -6,9 +6,10 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
+
+	log "github.com/sirupsen/logrus"
 
 	"k8s.io/apimachinery/pkg/version"
 
@@ -56,8 +57,7 @@ func Register(ctx context.Context,
 
 	v1alpha1.RegisterUserGeneratingHandler(ctx,
 		user,
-		apply.WithCacheTypes(serviceAccount,
-			crb, rb, secrets),
+		apply.WithCacheTypes(serviceAccount, crb, rb, secrets),
 		"",
 		"klum-user",
 		h.OnUserChange,
@@ -66,7 +66,7 @@ func Register(ctx context.Context,
 		})
 
 	secrets.OnChange(ctx, "klum-secret", h.OnSecretChange)
-	secrets.OnRemove(ctx, "klum-secret", h.OnSecretRemoved)
+	user.OnRemove(ctx, "klum-user", h.OnUserRemoved)
 }
 
 type handler struct {
@@ -89,6 +89,10 @@ func sanitizedVersion(v string) int {
 func (h *handler) OnUserChange(user *klum.User, status klum.UserStatus) ([]runtime.Object, klum.UserStatus, error) {
 	if user.Spec.Enabled != nil && !*user.Spec.Enabled {
 		status = setReady(status, false)
+		err := h.removeKubeconfig(user)
+		if err != nil {
+			log.Warning(err)
+		}
 		return nil, status, nil
 	}
 
@@ -300,23 +304,25 @@ func (h *handler) OnSecretChange(key string, secret *v1.Secret) (*v1.Secret, err
 		})
 }
 
-func (h *handler) OnSecretRemoved(key string, secret *v1.Secret) (*v1.Secret, error) {
-	userName, v, err2, done := getUserNameForSecret(secret, h)
-	if done {
-		return v, err2
-	}
-
-	_, err := h.kconfig.Get(userName, metav1.GetOptions{})
+func (h *handler) OnUserRemoved(s string, user *klum.User) (*klum.User, error) {
+	err := h.removeKubeconfig(user)
 	if err != nil {
-		return nil, err
+		return user, err
 	}
-
-	err = h.kconfig.Delete(userName, &metav1.DeleteOptions{})
-	if err != nil {
-		return nil, err
-	}
-
 	return nil, nil
+}
+
+func (h *handler) removeKubeconfig(user *klum.User) error {
+	_, err := h.kconfig.Get(user.Name, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+
+	err = h.kconfig.Delete(user.Name, &metav1.DeleteOptions{})
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func setReady(status klum.UserStatus, ready bool) klum.UserStatus {
