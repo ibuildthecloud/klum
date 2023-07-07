@@ -9,6 +9,7 @@ require (
 	github.com/rancher/wrangler v1.1.1
 	github.com/rancher/wrangler-api v0.6.0
 	github.com/sirupsen/logrus v1.9.3
+	github.com/stretchr/testify v1.8.4
 	github.com/urfave/cli v1.22.14
 	k8s.io/api v0.27.3
 	k8s.io/apiextensions-apiserver v0.27.3
@@ -43,6 +44,7 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_golang v1.14.0 // indirect
 	github.com/prometheus/client_model v0.3.0 // indirect
 	github.com/prometheus/common v0.37.0 // indirect

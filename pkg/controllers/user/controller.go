@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/version"
 
@@ -76,16 +77,22 @@ type handler struct {
 	kconfig         v1alpha1.KubeconfigController
 }
 
+func sanitizedVersion(v string) int {
+	v = strings.Trim(v, "+")
+	intVersion, err := strconv.Atoi(v)
+	if err != nil {
+		log.Fatalf("invalid kubernetes minor version: %v", err)
+	}
+	return intVersion
+}
+
 func (h *handler) OnUserChange(user *klum.User, status klum.UserStatus) ([]runtime.Object, klum.UserStatus, error) {
 	if user.Spec.Enabled != nil && !*user.Spec.Enabled {
 		status = setReady(status, false)
 		return nil, status, nil
 	}
 
-	intVersion, err := strconv.Atoi(h.k8sversion.Minor)
-	if err != nil {
-		log.Fatalf("invalid kubernetes minor version: %v", err)
-	}
+	intVersion := sanitizedVersion(h.k8sversion.Minor)
 
 	objs := []runtime.Object{
 		&v1.ServiceAccount{
