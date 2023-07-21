@@ -17,6 +17,7 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version-file: go.mod
+        cache: true
 
     - name: Build
       run: go build -v ./...

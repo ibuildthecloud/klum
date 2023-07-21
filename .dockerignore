@@ -1,3 +1,29 @@
-./.dapper
-./.cache
-./dist
+# Temp files
+.cache
+.dist
+
+# Git
+.git
+**/*.gitignore
+**/*.gitattributes
+
+# CI
+.dapper
+.github
+.golangci.json
+scripts
+
+# Docker
+Dockerfile
+
+# Docs
+**/*.md
+
+# OS
+**/.DS_Store
+**/Thumbs.db
+
+# Editors
+**/.vscode
+**/.idea
+**/*.swp
