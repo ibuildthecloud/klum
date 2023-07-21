@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/jadolg/klum/pkg/generated/controllers/klum.cattle.io"
+
 	"k8s.io/client-go/discovery"
 
 	"github.com/jadolg/klum/pkg/controllers/user"
@@ -74,6 +75,20 @@ func main() {
 			Value:       "cluster-admin",
 			Destination: &cfg.DefaultClusterRole,
 		},
+		cli.StringFlag{
+			Name:        "github-token",
+			Usage:       "The token used to push kubeconfigs to GitHub if you need this feature",
+			EnvVar:      "GITHUB_TOKEN",
+			Value:       "",
+			Destination: &cfg.GithubToken,
+		},
+		cli.StringFlag{
+			Name:        "github-url",
+			Usage:       "The GitHub URL if you are using GitHub enterprise",
+			EnvVar:      "GITHUB_URL",
+			Value:       "",
+			Destination: &cfg.GithubURL,
+		},
 	}
 	app.Action = run
 
@@ -84,6 +99,9 @@ func main() {
 
 func run(c *cli.Context) error {
 	logrus.Info("Starting klum controller")
+	if cfg.GithubToken != "" {
+		logrus.Info("Synchronizing annotated credentials to github secrets")
+	}
 	ctx := signals.SetupSignalContext()
 
 	restConfig, err := kubeconfig.GetNonInteractiveClientConfig(kubeConfig).ClientConfig()
@@ -134,6 +152,7 @@ func run(c *cli.Context) error {
 		core.Core().V1().Secret(),
 		klum.Klum().V1alpha1().Kubeconfig(),
 		klum.Klum().V1alpha1().User(),
+		klum.Klum().V1alpha1().UserSyncGithub(),
 		k8sversion,
 	)
 

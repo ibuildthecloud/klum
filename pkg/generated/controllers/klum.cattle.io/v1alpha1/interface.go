@@ -32,6 +32,7 @@ func init() {
 type Interface interface {
 	Kubeconfig() KubeconfigController
 	User() UserController
+	UserSyncGithub() UserSyncGithubController
 }
 
 func New(controllerFactory controller.SharedControllerFactory) Interface {
@@ -49,4 +50,7 @@ func (c *version) Kubeconfig() KubeconfigController {
 }
 func (c *version) User() UserController {
 	return NewUserController(schema.GroupVersionKind{Group: "klum.cattle.io", Version: "v1alpha1", Kind: "User"}, "users", false, c.controllerFactory)
+}
+func (c *version) UserSyncGithub() UserSyncGithubController {
+	return NewUserSyncGithubController(schema.GroupVersionKind{Group: "klum.cattle.io", Version: "v1alpha1", Kind: "UserSyncGithub"}, "usersyncgithubs", false, c.controllerFactory)
 }

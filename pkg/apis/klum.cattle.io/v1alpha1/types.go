@@ -1,13 +1,16 @@
 package v1alpha1
 
 import (
+	"fmt"
+
 	"github.com/rancher/wrangler/pkg/condition"
 	"github.com/rancher/wrangler/pkg/genericcondition"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 var (
-	UserReadyCondition = condition.Cond("Ready")
+	UserReadyCondition     = condition.Cond("Ready")
+	UserSyncReadyCondition = condition.Cond("Ready")
 )
 
 // +genclient
@@ -104,4 +107,38 @@ type NamedContext struct {
 	Name string `json:"name"`
 	// Context holds the context information
 	Context Context `json:"context"`
+}
+
+// +genclient
+// +genclient:nonNamespaced
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+type UserSyncGithub struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              UserSyncGithubSpec `json:"spec"`
+	Status            UserSyncStatus     `json:"status,omitempty"`
+}
+
+type UserSyncGithubSpec struct {
+	User   string         `json:"user"`
+	Github GithubSyncSpec `json:"github"`
+}
+
+type GithubSyncSpec struct {
+	Owner       string `json:"owner"`
+	Repository  string `json:"repository"`
+	Environment string `json:"environment,omitempty"`
+	SecretName  string `json:"secretName"`
+}
+
+func (g *GithubSyncSpec) Validate() error {
+	if g.SecretName != "" && g.Owner != "" && g.Repository != "" {
+		return nil
+	}
+	return fmt.Errorf("not enough github data to be able to remove a GitHub secret")
+}
+
+type UserSyncStatus struct {
+	Conditions []genericcondition.GenericCondition `json:"conditions,omitempty"`
 }

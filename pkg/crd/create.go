@@ -19,7 +19,9 @@ func Create(ctx context.Context, config *rest.Config) error {
 
 	return factory.BatchCreateCRDs(ctx,
 		newCRD("User.klum.cattle.io/v1alpha1", v1alpha1.User{}),
-		newCRD("Kubeconfig.klum.cattle.io/v1alpha1", v1alpha1.Kubeconfig{})).BatchWait()
+		newCRD("Kubeconfig.klum.cattle.io/v1alpha1", v1alpha1.Kubeconfig{}),
+		newCRD("UserSyncGithub.klum.cattle.io/v1alpha1", v1alpha1.UserSyncGithub{}),
+	).BatchWait()
 }
 
 func newCRD(name string, obj interface{}) crd.CRD {

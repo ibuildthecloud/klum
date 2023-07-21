@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jadolg/klum/pkg/github"
+
 	log "github.com/sirupsen/logrus"
 
 	"k8s.io/apimachinery/pkg/version"
@@ -34,6 +36,8 @@ type Config struct {
 	Server             string
 	CA                 string
 	DefaultClusterRole string
+	GithubURL          string
+	GithubToken        string
 }
 
 func Register(ctx context.Context,
@@ -45,6 +49,7 @@ func Register(ctx context.Context,
 	secrets v1controller.SecretController,
 	kconfig v1alpha1.KubeconfigController,
 	user v1alpha1.UserController,
+	userSyncGithub v1alpha1.UserSyncGithubController,
 	k8sversion *version.Info) {
 
 	h := &handler{
@@ -53,6 +58,8 @@ func Register(ctx context.Context,
 		serviceAccounts: serviceAccount.Cache(),
 		k8sversion:      k8sversion,
 		kconfig:         kconfig,
+		kuser:           user,
+		kuserSyncGithub: userSyncGithub,
 	}
 
 	v1alpha1.RegisterUserGeneratingHandler(ctx,
@@ -65,8 +72,21 @@ func Register(ctx context.Context,
 			AllowClusterScoped: true,
 		})
 
+	v1alpha1.RegisterUserSyncGithubGeneratingHandler(
+		ctx,
+		userSyncGithub,
+		apply,
+		"",
+		"klum-usersync",
+		h.OnUserSyncGithubChange,
+		&generic.GeneratingHandlerOptions{
+			AllowClusterScoped: true,
+		},
+	)
+
 	secrets.OnChange(ctx, "klum-secret", h.OnSecretChange)
-	user.OnRemove(ctx, "klum-user", h.OnUserRemoved)
+	kconfig.OnChange(ctx, "klum-kconfig", h.OnKubeconfigChange)
+	userSyncGithub.OnRemove(ctx, "klum-usersync", h.OnUserSyncGithubRemove)
 }
 
 type handler struct {
@@ -74,7 +94,9 @@ type handler struct {
 	apply           apply.Apply
 	serviceAccounts v1controller.ServiceAccountCache
 	k8sversion      *version.Info
+	kuser           v1alpha1.UserController
 	kconfig         v1alpha1.KubeconfigController
+	kuserSyncGithub v1alpha1.UserSyncGithubController
 }
 
 func sanitizedVersion(v string) int {
@@ -96,8 +118,6 @@ func (h *handler) OnUserChange(user *klum.User, status klum.UserStatus) ([]runti
 		return nil, status, nil
 	}
 
-	intVersion := sanitizedVersion(h.k8sversion.Minor)
-
 	objs := []runtime.Object{
 		&v1.ServiceAccount{
 			ObjectMeta: metav1.ObjectMeta{
@@ -110,7 +130,7 @@ func (h *handler) OnUserChange(user *klum.User, status klum.UserStatus) ([]runti
 		},
 	}
 
-	if intVersion >= 24 {
+	if sanitizedVersion(h.k8sversion.Minor) >= 24 {
 		objs = append(objs,
 			&v1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
@@ -254,9 +274,9 @@ func getUserNameForSecret(secret *v1.Secret, h *handler) (string, *v1.Secret, er
 }
 
 func (h *handler) OnSecretChange(key string, secret *v1.Secret) (*v1.Secret, error) {
-	userName, v, err2, done := getUserNameForSecret(secret, h)
+	userName, sec, err, done := getUserNameForSecret(secret, h)
 	if done {
-		return v, err2
+		return sec, err
 	}
 
 	ca := h.cfg.CA
@@ -304,14 +324,6 @@ func (h *handler) OnSecretChange(key string, secret *v1.Secret) (*v1.Secret, err
 		})
 }
 
-func (h *handler) OnUserRemoved(s string, user *klum.User) (*klum.User, error) {
-	err := h.removeKubeconfig(user)
-	if err != nil {
-		return user, err
-	}
-	return nil, nil
-}
-
 func (h *handler) removeKubeconfig(user *klum.User) error {
 	_, err := h.kconfig.Get(user.Name, metav1.GetOptions{})
 	if err != nil {
@@ -325,9 +337,86 @@ func (h *handler) removeKubeconfig(user *klum.User) error {
 	return nil
 }
 
+func (h *handler) OnKubeconfigChange(s string, kubeconfig *klum.Kubeconfig) (*klum.Kubeconfig, error) {
+	if kubeconfig == nil {
+		return nil, nil
+	}
+	// ToDo: Check how we can make `spec.user` usable as a field selector
+	userSyncsGithub, err := h.kuserSyncGithub.List(metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	for _, userSync := range userSyncsGithub.Items {
+		if userSync.Spec.User == kubeconfig.Name {
+			log.Infof("Synchronizing credentials for %s", userSync.Name)
+			h.kuserSyncGithub.Enqueue(userSync.Name)
+		}
+	}
+	return kubeconfig, nil
+}
+
+func (h *handler) OnUserSyncGithubChange(syncGithub *klum.UserSyncGithub, s klum.UserSyncStatus) ([]runtime.Object, klum.UserSyncStatus, error) {
+	if syncGithub == nil {
+		return nil, setSyncGithubReady(s, false, nil), nil
+	}
+	if h.cfg.GithubToken != "" {
+		kubeconfig, err := h.kconfig.Get(syncGithub.Spec.User, metav1.GetOptions{})
+		if err != nil {
+			return nil, setSyncGithubReady(s, false, err), err
+		}
+
+		if kubeconfig != nil {
+			err = github.UploadKubeconfig(syncGithub, kubeconfig, h.cfg.GithubURL, h.cfg.GithubToken)
+			if err != nil {
+				return nil, setSyncGithubReady(s, false, err), err
+			}
+
+			_, err := h.kuserSyncGithub.Update(syncGithub)
+			if err != nil {
+				return nil, setSyncGithubReady(s, false, err), err
+			}
+		} else {
+			return nil, setSyncGithubReady(s, false, err), fmt.Errorf("kubeconfig for user %s is not yet ready", syncGithub.Spec.User)
+		}
+	} else {
+		log.WithFields(log.Fields{
+			"usersync": syncGithub.Name,
+		}).Warning("Github Synchronization is disabled but UserSyncGithub objects are created")
+		err := fmt.Errorf("GitHub Synchronization is disabled in klum")
+		return nil, setSyncGithubReady(s, false, err), nil
+	}
+
+	return []runtime.Object{}, setSyncGithubReady(s, true, nil), nil
+}
+
+func (h *handler) OnUserSyncGithubRemove(s string, sync *klum.UserSyncGithub) (*klum.UserSyncGithub, error) {
+	if sync == nil {
+		return nil, nil
+	}
+	if h.cfg.GithubToken != "" {
+		err := github.DeleteKubeconfig(sync, h.cfg.GithubURL, h.cfg.GithubToken)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		log.Warning("Github Synchronization is disabled but UserSyncGithub objects are created")
+	}
+
+	return nil, nil
+}
+
 func setReady(status klum.UserStatus, ready bool) klum.UserStatus {
 	// dumb hack to set condition, should really make this easier
 	user := &klum.User{Status: status}
 	klum.UserReadyCondition.SetStatusBool(user, ready)
 	return user.Status
+}
+
+func setSyncGithubReady(status klum.UserSyncStatus, ready bool, err error) klum.UserSyncStatus {
+	userSync := &klum.UserSyncGithub{Status: status}
+	klum.UserSyncReadyCondition.SetStatusBool(userSync, ready)
+	if err != nil {
+		klum.UserSyncReadyCondition.SetError(userSync, err.Error(), err)
+	}
+	return userSync.Status
 }

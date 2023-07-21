@@ -18,6 +18,7 @@ func main() {
 				Types: []interface{}{
 					v1alpha1.User{},
 					v1alpha1.Kubeconfig{},
+					v1alpha1.UserSyncGithub{},
 				},
 				GenerateTypes: true,
 			},
