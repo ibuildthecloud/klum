@@ -11,7 +11,7 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-func UploadKubeconfig(userSync *klum.UserSyncGithub, kubeconfig *klum.Kubeconfig, githubURL string, githubToken string) error {
+func UploadKubeconfig(userSync *klum.UserSyncGithub, kubeconfig *klum.Kubeconfig, cfg Config) error {
 	githubSync := userSync.Spec.Github
 	if err := githubSync.Validate(); err != nil {
 		return err
@@ -38,7 +38,7 @@ func UploadKubeconfig(userSync *klum.UserSyncGithub, kubeconfig *klum.Kubeconfig
 		"env":    githubSync.Environment,
 	}).Info("Adding secret")
 
-	client, err := newGithubClientWithToken(githubToken, githubURL)
+	client, err := newGithubClient(cfg, githubSync.Owner, githubSync.Repository)
 	if err != nil {
 		return err
 	}
@@ -79,7 +79,7 @@ func isSecretUpToDate(userSync *klum.UserSyncGithub, kubeconfigYAML []byte) (boo
 	return false, hash
 }
 
-func DeleteKubeconfig(userSync *klum.UserSyncGithub, githubURL string, githubToken string) error {
+func DeleteKubeconfig(userSync *klum.UserSyncGithub, cfg Config) error {
 	githubSync := userSync.Spec.Github
 	if err := githubSync.Validate(); err != nil {
 		return err
@@ -92,7 +92,7 @@ func DeleteKubeconfig(userSync *klum.UserSyncGithub, githubURL string, githubTok
 		"env":    githubSync.Environment,
 	}).Info("Deleting secret")
 
-	client, err := newGithubClientWithToken(githubToken, githubURL)
+	client, err := newGithubClient(cfg, githubSync.Owner, githubSync.Repository)
 	if err != nil {
 		return err
 	}

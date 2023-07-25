@@ -36,8 +36,7 @@ type Config struct {
 	Server             string
 	CA                 string
 	DefaultClusterRole string
-	GithubURL          string
-	GithubToken        string
+	GithubConfig       github.Config
 }
 
 func Register(ctx context.Context,
@@ -359,14 +358,14 @@ func (h *handler) OnUserSyncGithubChange(syncGithub *klum.UserSyncGithub, s klum
 	if syncGithub == nil {
 		return nil, setSyncGithubReady(s, false, nil), nil
 	}
-	if h.cfg.GithubToken != "" {
+	if h.cfg.GithubConfig.Enabled() {
 		kubeconfig, err := h.kconfig.Get(syncGithub.Spec.User, metav1.GetOptions{})
 		if err != nil {
 			return nil, setSyncGithubReady(s, false, err), err
 		}
 
 		if kubeconfig != nil {
-			err = github.UploadKubeconfig(syncGithub, kubeconfig, h.cfg.GithubURL, h.cfg.GithubToken)
+			err = github.UploadKubeconfig(syncGithub, kubeconfig, h.cfg.GithubConfig)
 			if err != nil {
 				return nil, setSyncGithubReady(s, false, err), err
 			}
@@ -393,8 +392,8 @@ func (h *handler) OnUserSyncGithubRemove(s string, sync *klum.UserSyncGithub) (*
 	if sync == nil {
 		return nil, nil
 	}
-	if h.cfg.GithubToken != "" {
-		err := github.DeleteKubeconfig(sync, h.cfg.GithubURL, h.cfg.GithubToken)
+	if h.cfg.GithubConfig.Enabled() {
+		err := github.DeleteKubeconfig(sync, h.cfg.GithubConfig)
 		if err != nil {
 			return nil, err
 		}

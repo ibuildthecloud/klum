@@ -5,7 +5,7 @@ go 1.20
 replace github.com/rancher/wrangler-api => github.com/dylanhitt/wrangler-api v0.7.0
 
 require (
-	github.com/ghodss/yaml v1.0.0
+	github.com/bradleyfalzon/ghinstallation/v2 v2.6.0
 	github.com/google/go-github/v53 v53.2.0
 	github.com/rancher/lasso v0.0.0-20230502204209-3eb356f3e8cf
 	github.com/rancher/wrangler v1.1.1
@@ -19,6 +19,7 @@ require (
 	k8s.io/apiextensions-apiserver v0.27.3
 	k8s.io/apimachinery v0.27.3
 	k8s.io/client-go v0.27.3
+	sigs.k8s.io/yaml v1.3.0
 )
 
 require (
@@ -30,11 +31,13 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/emicklei/go-restful/v3 v3.9.0 // indirect
 	github.com/evanphx/json-patch v4.12.0+incompatible // indirect
+	github.com/ghodss/yaml v1.0.0 // indirect
 	github.com/go-logr/logr v1.2.3 // indirect
 	github.com/go-openapi/jsonpointer v0.19.6 // indirect
 	github.com/go-openapi/jsonreference v0.20.1 // indirect
 	github.com/go-openapi/swag v0.22.3 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/golang-jwt/jwt/v4 v4.5.0 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/google/gnostic v0.5.7-v3refs // indirect
 	github.com/google/go-cmp v0.5.9 // indirect
@@ -77,5 +80,4 @@ require (
 	k8s.io/utils v0.0.0-20230209194617-a36077c30491 // indirect
 	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.2.3 // indirect
-	sigs.k8s.io/yaml v1.3.0 // indirect
 )

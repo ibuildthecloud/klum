@@ -80,14 +80,28 @@ func main() {
 			Usage:       "The token used to push kubeconfigs to GitHub if you need this feature",
 			EnvVar:      "GITHUB_TOKEN",
 			Value:       "",
-			Destination: &cfg.GithubToken,
+			Destination: &cfg.GithubConfig.Token,
 		},
 		cli.StringFlag{
 			Name:        "github-url",
 			Usage:       "The GitHub URL if you are using GitHub enterprise",
 			EnvVar:      "GITHUB_URL",
 			Value:       "",
-			Destination: &cfg.GithubURL,
+			Destination: &cfg.GithubConfig.BaseURL,
+		},
+		cli.StringFlag{
+			Name:        "github-app-private-key-file",
+			Usage:       "GitHub private key file if you are using App based authentication",
+			EnvVar:      "GITHUB_APP_PRIVATE_KEY_FILE",
+			Value:       "",
+			Destination: &cfg.GithubConfig.PrivateKeyFile,
+		},
+		cli.Int64Flag{
+			Name:        "github-app-id",
+			Usage:       "GitHub app id if you are using App based authentication",
+			EnvVar:      "GITHUB_APP_ID",
+			Value:       0,
+			Destination: &cfg.GithubConfig.AppID,
 		},
 	}
 	app.Action = run
@@ -99,7 +113,7 @@ func main() {
 
 func run(c *cli.Context) error {
 	logrus.Info("Starting klum controller")
-	if cfg.GithubToken != "" {
+	if cfg.GithubConfig.Enabled() {
 		logrus.Info("Synchronizing annotated credentials to github secrets")
 	}
 	ctx := signals.SetupSignalContext()

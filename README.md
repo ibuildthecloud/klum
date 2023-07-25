@@ -108,13 +108,15 @@ then environment variables:
 
 ```shell script
 GLOBAL OPTIONS:
-   --namespace value             Namespace to create secrets and SAs in (default: "klum") [$NAMESPACE]
-   --context-name value          Context name to put in Kubeconfigs (default: "default") [$CONTEXT_NAME]
-   --server value                The external server field to put in the Kubeconfigs (default: "https://localhost:6443") [$SERVER_NAME]
-   --ca value                    The value of the CA data to put in the Kubeconfig [$CA]
-   --default-cluster-role value  Default cluster-role to assign to users with no roles (default: "cluster-admin") [$DEFAULT_CLUSTER_ROLE]
-   --github-token value          The token used to push kubeconfigs to GitHub if you need this feature [$GITHUB_TOKEN]
-   --github-url value            The GitHub URL if you are using GitHub enterprise [$GITHUB_URL]
+   --namespace value                    Namespace to create secrets and SAs in (default: "klum") [$NAMESPACE]
+   --context-name value                 Context name to put in Kubeconfigs (default: "default") [$CONTEXT_NAME]
+   --server value                       The external server field to put in the Kubeconfigs (default: "https://localhost:6443") [$SERVER_NAME]
+   --ca value                           The value of the CA data to put in the Kubeconfig [$CA]
+   --default-cluster-role value         Default cluster-role to assign to users with no roles (default: "cluster-admin") [$DEFAULT_CLUSTER_ROLE]
+   --github-token value                 The token used to push kubeconfigs to GitHub if you need this feature [$GITHUB_TOKEN]
+   --github-url value                   The GitHub URL if you are using GitHub enterprise [$GITHUB_URL]
+   --github-app-private-key-file value  GitHub private key file if you are using App based authentication [$GITHUB_APP_PRIVATE_KEY_FILE]
+   --github-app-id value                GitHub app id if you are using App based authentication (default: 0) [$GITHUB_APP_ID]
 ```
 
 ## Building
