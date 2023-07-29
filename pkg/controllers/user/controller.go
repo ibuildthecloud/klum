@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jadolg/klum/pkg/metrics"
+
 	"github.com/jadolg/klum/pkg/github"
 
 	log "github.com/sirupsen/logrus"
@@ -37,6 +39,7 @@ type Config struct {
 	CA                 string
 	DefaultClusterRole string
 	GithubConfig       github.Config
+	MetricsPort        int
 }
 
 func Register(ctx context.Context,
@@ -112,7 +115,8 @@ func (h *handler) OnUserChange(user *klum.User, status klum.UserStatus) ([]runti
 		status = setReady(status, false)
 		err := h.removeKubeconfig(user)
 		if err != nil {
-			log.Warning(err)
+			log.Error(err)
+			metrics.ErrorsTotal.Inc()
 		}
 		return nil, status, nil
 	}
@@ -244,38 +248,38 @@ func name(user, namespace, clusterRole, role string) string {
 	return name2.SafeConcatName("klum", user, role, hex.EncodeToString(suffix[:])[:8])
 }
 
-func getUserNameForSecret(secret *v1.Secret, h *handler) (string, *v1.Secret, error, bool) {
+func getUserNameForSecret(secret *v1.Secret, h *handler) (string, *v1.Secret, bool) {
 	if secret == nil {
-		return "", nil, nil, true
+		return "", nil, true
 	}
 
 	if secret.Type != v1.SecretTypeServiceAccountToken {
-		return "", secret, nil, true
+		return "", secret, true
 	}
 
 	sa, err := h.serviceAccounts.Get(secret.Namespace, secret.Annotations["kubernetes.io/service-account.name"])
 	if errors.IsNotFound(err) {
-		return "", secret, nil, true
+		return "", secret, true
 	} else if err != nil {
-		return "", secret, nil, true
+		return "", secret, true
 	}
 
 	if sa.UID != types.UID(secret.Annotations["kubernetes.io/service-account.uid"]) {
-		return "", secret, nil, true
+		return "", secret, true
 	}
 
 	userName := sa.Annotations["klum.cattle.io/user"]
 	if userName == "" {
-		return "", secret, nil, true
+		return "", secret, true
 	}
 
-	return userName, nil, nil, false
+	return userName, nil, false
 }
 
 func (h *handler) OnSecretChange(key string, secret *v1.Secret) (*v1.Secret, error) {
-	userName, sec, err, done := getUserNameForSecret(secret, h)
+	userName, sec, done := getUserNameForSecret(secret, h)
 	if done {
-		return sec, err
+		return sec, nil
 	}
 
 	ca := h.cfg.CA
@@ -343,6 +347,7 @@ func (h *handler) OnKubeconfigChange(s string, kubeconfig *klum.Kubeconfig) (*kl
 	// ToDo: Check how we can make `spec.user` usable as a field selector
 	userSyncsGithub, err := h.kuserSyncGithub.List(metav1.ListOptions{})
 	if err != nil {
+		metrics.ErrorsTotal.Inc()
 		return nil, err
 	}
 	for _, userSync := range userSyncsGithub.Items {
@@ -367,11 +372,13 @@ func (h *handler) OnUserSyncGithubChange(syncGithub *klum.UserSyncGithub, s klum
 		if kubeconfig != nil {
 			err = github.UploadKubeconfig(syncGithub, kubeconfig, h.cfg.GithubConfig)
 			if err != nil {
+				metrics.ErrorsTotal.Inc()
 				return nil, setSyncGithubReady(s, false, err), err
 			}
 
 			_, err := h.kuserSyncGithub.Update(syncGithub)
 			if err != nil {
+				metrics.ErrorsTotal.Inc()
 				return nil, setSyncGithubReady(s, false, err), err
 			}
 		} else {
@@ -382,6 +389,7 @@ func (h *handler) OnUserSyncGithubChange(syncGithub *klum.UserSyncGithub, s klum
 			"usersync": syncGithub.Name,
 		}).Warning("Github Synchronization is disabled but UserSyncGithub objects are created")
 		err := fmt.Errorf("GitHub Synchronization is disabled in klum")
+		metrics.ErrorsTotal.Inc()
 		return nil, setSyncGithubReady(s, false, err), nil
 	}
 
@@ -395,6 +403,7 @@ func (h *handler) OnUserSyncGithubRemove(s string, sync *klum.UserSyncGithub) (*
 	if h.cfg.GithubConfig.Enabled() {
 		err := github.DeleteKubeconfig(sync, h.cfg.GithubConfig)
 		if err != nil {
+			metrics.ErrorsTotal.Inc()
 			return nil, err
 		}
 	} else {
@@ -415,6 +424,7 @@ func setSyncGithubReady(status klum.UserSyncStatus, ready bool, err error) klum.
 	userSync := &klum.UserSyncGithub{Status: status}
 	klum.UserSyncReadyCondition.SetStatusBool(userSync, ready)
 	if err != nil {
+		metrics.ErrorsTotal.Inc()
 		klum.UserSyncReadyCondition.SetError(userSync, err.Error(), err)
 	}
 	return userSync.Status

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/jadolg/klum/pkg/metrics"
+
 	"github.com/jadolg/klum/pkg/generated/controllers/klum.cattle.io"
 
 	"k8s.io/client-go/discovery"
@@ -103,6 +105,13 @@ func main() {
 			Value:       0,
 			Destination: &cfg.GithubConfig.AppID,
 		},
+		cli.IntFlag{
+			Name:        "metrics-port",
+			Usage:       "Port used to export the /metrics endpoint",
+			EnvVar:      "METRICS_PORT",
+			Value:       0,
+			Destination: &cfg.MetricsPort,
+		},
 	}
 	app.Action = run
 
@@ -169,6 +178,10 @@ func run(c *cli.Context) error {
 		klum.Klum().V1alpha1().UserSyncGithub(),
 		k8sversion,
 	)
+
+	if cfg.MetricsPort != 0 {
+		go metrics.StartMetricsServer(cfg.MetricsPort)
+	}
 
 	if err := start.All(ctx, 2, klum, core, rbac); err != nil {
 		logrus.Fatalf("Error starting: %s", err.Error())
