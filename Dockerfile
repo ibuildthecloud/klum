@@ -1,4 +1,4 @@
-FROM golang:1.20-alpine as build
+FROM golang:1.21-alpine as build
 
 RUN adduser --uid 1000 --disabled-password klum-user
 
